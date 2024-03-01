@@ -131,4 +131,3 @@ do
 done
 endtimestamp=`date +%s`
 echo "Generated: `date` / Runtime $((endtimestamp - starttimestamp)) seconds"
-vmware@fileshare:/mnt/repository/v4github$
