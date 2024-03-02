@@ -1,9 +1,6 @@
 from requests import get
 from sys import argv
 
-import pprint
-pp = pprint.PrettyPrinter(width = 41, compact = True)
-
 INDEXERURL = 'https://indexer.dydx.trade/v4'
 if len(argv) < 1:
         print('Error: Must specify market')
