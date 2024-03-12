@@ -35,7 +35,7 @@ fi
 for s1 in $*
 do
         market=`echo $s1 | cut -d : -f 1`
-        python3 v4dydxl2funding.py $market > /tmp/v4dydxl2funding$market$$ &
+        python3 v4dydxl2funding.py $market > /tmp/v4dydxl2funding$market &
 done
 wait
 for s1 in $*
@@ -50,7 +50,7 @@ do
                 backgroundcolor=
                 backgroundcoloroff=
         fi
-        fundingarray=( `cat /tmp/v4dydxl2funding$market$$` )
+        fundingarray=( `cat /tmp/v4dydxl2funding$market` )
         counter=0
         fundingsum=0
         while [ $counter -lt ${#fundingarray[@]} ]
@@ -127,7 +127,7 @@ do
                         fi
                 fi
         fi
-        rm /tmp/v4dydxl2funding$market$$
+        rm /tmp/v4dydxl2funding$market
 done
 endtimestamp=`date +%s`
 echo "Generated: `date` / Runtime $((endtimestamp - starttimestamp)) seconds"
