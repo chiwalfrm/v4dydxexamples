@@ -2,6 +2,7 @@ from requests import get
 from sys import argv
 
 INDEXERURL = 'https://indexer.dydx.trade/v4'
+
 if len(argv) < 1:
         print('Error: Must specify market')
         exit()
