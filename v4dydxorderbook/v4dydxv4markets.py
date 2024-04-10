@@ -1,27 +1,14 @@
+import asyncio
 import json
-import logging
+import logging, logging.handlers
 import os
 import sys
+import websockets
 from datetime import datetime
-from logging import handlers
-from random import randint
 from requests import get
 from time import sleep
-from websocket import create_connection
 
 WSINDEXERURL = 'wss://indexer.dydx.trade/v4/ws'
-
-def openconnection():
-        global ws
-        ws = create_connection(WSINDEXERURL)
-        api_data = {
-                "type": "subscribe",
-                "channel": "v4_markets"
-        }
-        ws.send(json.dumps(api_data))
-        api_data = ws.recv()
-        api_data = json.loads(api_data)
-        print(api_data)
 
 def checkwidth(
         framdiskpath,
@@ -268,6 +255,85 @@ def processcontentsdict(
                                 felementsize = len(str(marketdatavalue))
                         )
 
+async def wsrun(uri):
+        async for websocket in websockets.connect(uri):
+                try:
+                        api_data = {
+                                "type": "subscribe",
+                                "channel": "v4_markets",
+                        }
+                        await websocket.send(json.dumps(api_data))
+                        print(await websocket.recv())
+                        while True:
+                                api_data = await websocket.recv()
+                                api_data = json.loads(api_data)
+                                if isinstance(api_data['contents'], dict):
+                                        if 'markets' in api_data['contents'].keys():
+                                                processcontentsdict(
+                                                        framdiskpath = ramdiskpath,
+                                                        fcontentsdict = api_data['contents']['markets'],
+                                                        fenvelope = 'markets'
+                                                )
+                                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (markets)")
+                                                logger.info(api_data['contents']['markets'])
+                                        elif 'trading' in api_data['contents'].keys():
+                                                processcontentsdict(
+                                                        framdiskpath = ramdiskpath,
+                                                        fcontentsdict = api_data['contents']['trading'],
+                                                        fenvelope = 'trading'
+                                                )
+                                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (trading)")
+                                                logger.info(api_data['contents']['trading'])
+                                        elif 'oraclePrices' in api_data['contents'].keys():
+                                                processcontentsdict(
+                                                        framdiskpath = ramdiskpath,
+                                                        fcontentsdict = api_data['contents']['oraclePrices'],
+                                                        fenvelope = 'oraclePrices'
+                                                )
+                                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (oraclePrices)")
+                                                logger.info(api_data['contents']['oraclePrices'])
+                                        else:
+                                                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+" === v4_markets key not handled ===")
+                                                print(api_data['contents'].keys)
+                                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (OTHER)")
+                                                logger.info(api_data['contents'])
+                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (DICT)")
+                                        logger.info(api_data)
+                                elif isinstance(api_data['contents'], list):
+                                        for item in api_data['contents']:
+                                                if 'markets' in item.keys():
+                                                        processcontentsdict(
+                                                                framdiskpath = ramdiskpath,
+                                                                fcontentsdict = item['markets'],
+                                                                fenvelope = 'markets'
+                                                        )
+                                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (markets)")
+                                                        logger.info(item['markets'])
+                                                if 'trading' in item.keys():
+                                                        processcontentsdict(
+                                                                framdiskpath = ramdiskpath,
+                                                                fcontentsdict = item['trading'],
+                                                                fenvelope = 'trading'
+                                                        )
+                                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (trading)")
+                                                        logger.info(item['trading'])
+                                                elif 'oraclePrices' in item.keys():
+                                                        processcontentsdict(
+                                                                framdiskpath = ramdiskpath,
+                                                                fcontentsdict = item['oraclePrices'],
+                                                                fenvelope = 'trading'
+                                                )
+                                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (oraclePrices)")
+                                                        logger.info(item['oraclePrices'])
+                                                else:
+                                                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+" === v4_markets key not handled ===")
+                                                        print(item.keys())
+                                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (OTHER)")
+                                                        logger.info(item)
+                except Exception as error:
+                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s)" % error)
+                        continue
+
 print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+' v4dydxv4markets.py')
 logger = logging.getLogger("Rotating Log")
 logger.setLevel(logging.INFO)
@@ -320,84 +386,4 @@ maxwidthstepSize = 0
 maxwidthsubticksPerTick = 0
 maxwidthticker = 0
 maxwidthtickSize = 0
-openconnection()
-while True:
-        try:
-                api_data = ws.recv()
-                api_data = json.loads(api_data)
-                if isinstance(api_data['contents'], dict):
-                        if 'markets' in api_data['contents'].keys():
-                                processcontentsdict(
-                                        framdiskpath = ramdiskpath,
-                                        fcontentsdict = api_data['contents']['markets'],
-                                        fenvelope = 'markets'
-                                )
-                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (markets)")
-                                logger.info(api_data['contents']['markets'])
-                        elif 'trading' in api_data['contents'].keys():
-                                processcontentsdict(
-                                        framdiskpath = ramdiskpath,
-                                        fcontentsdict = api_data['contents']['trading'],
-                                        fenvelope = 'trading'
-                                )
-                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (trading)")
-                                logger.info(api_data['contents']['trading'])
-                        elif 'oraclePrices' in api_data['contents'].keys():
-                                processcontentsdict(
-                                        framdiskpath = ramdiskpath,
-                                        fcontentsdict = api_data['contents']['oraclePrices'],
-                                        fenvelope = 'oraclePrices'
-                                )
-                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (oraclePrices)")
-                                logger.info(api_data['contents']['oraclePrices'])
-                        else:
-                                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+" === v4_markets key not handled ===")
-                                print(api_data['contents'].keys)
-                                logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (OTHER)")
-                                logger.info(api_data['contents'])
-                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (DICT)")
-                        logger.info(api_data)
-                elif isinstance(api_data['contents'], list):
-                        for item in api_data['contents']:
-                                if 'markets' in item.keys():
-                                        processcontentsdict(
-                                                framdiskpath = ramdiskpath,
-                                                fcontentsdict = item['markets'],
-                                                fenvelope = 'markets'
-                                        )
-                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (markets)")
-                                        logger.info(item['markets'])
-                                if 'trading' in item.keys():
-                                        processcontentsdict(
-                                                framdiskpath = ramdiskpath,
-                                                fcontentsdict = item['trading'],
-                                                fenvelope = 'trading'
-                                        )
-                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (trading)")
-                                        logger.info(item['trading'])
-                                elif 'oraclePrices' in item.keys():
-                                        processcontentsdict(
-                                                framdiskpath = ramdiskpath,
-                                                fcontentsdict = item['oraclePrices'],
-                                                fenvelope = 'trading'
-                                )
-                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (oraclePrices)")
-                                        logger.info(item['oraclePrices'])
-                                else:
-                                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+" === v4_markets key not handled ===")
-                                        print(item.keys())
-                                        logger.info("{'timestamp': '"+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+"'} (OTHER)")
-                                        logger.info(item)
-        except KeyboardInterrupt:
-                ws.close()
-                sys.exit(0)
-        except Exception as error:
-                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s)" % error)
-                ws.close()
-                sleep(1)
-                try:
-                        openconnection()
-                except Exception as error:
-                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s)" % error)
-                        ws.close()
-                        sleep(randint(1,10))
+asyncio.get_event_loop().run_until_complete(wsrun(WSINDEXERURL))
