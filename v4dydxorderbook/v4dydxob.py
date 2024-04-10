@@ -1,15 +1,17 @@
+import asyncio
 import json
-import logging
+import logging, logging.handlers
 import os
 import sys
+import websockets
 from datetime import datetime
-from logging import handlers
-from random import randint
 from requests import get
 from time import sleep
-from websocket import create_connection
 
 WSINDEXERURL = 'wss://indexer.dydx.trade/v4/ws'
+
+import pprint
+pp = pprint.PrettyPrinter(width = 41, compact = True)
 
 def checkaskfiles(
         framdiskpath,
@@ -67,19 +69,6 @@ def checkbidfiles(
                         fp.close()
                 logger.info(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+' Updated '+framdiskpath+'/'+fmarket+'/bids/'+fbidprice+': '+str('('+fbidsize+')').ljust(10)+' '+str(fbidoffset))
 
-def openconnection():
-        global ws
-        ws = create_connection(WSINDEXERURL)
-        api_data = {
-                "type": "subscribe",
-                "channel": "v4_orderbook",
-                "id": market,
-        }
-        ws.send(json.dumps(api_data))
-        api_data = ws.recv()
-        api_data = json.loads(api_data)
-        print(api_data)
-
 def checkwidth(
         framdiskpath,
         fmarket,
@@ -98,6 +87,120 @@ def checkwidth(
                 fp.write(str(felementsize)+'\n')
                 fp.close()
                 maxwidthsize = felementsize
+
+async def wsrun(uri):
+        async for websocket in websockets.connect(uri):
+                try:
+                        api_data = {
+                                "type": "subscribe",
+                                "channel": "v4_orderbook",
+                                "id": market,
+                        }
+                        await websocket.send(json.dumps(api_data))
+                        print(await websocket.recv())
+                        while True:
+                                api_data = await websocket.recv()
+                                api_data = json.loads(api_data)
+                                askoffset = api_data['message_id']
+                                bidoffset = api_data['message_id']
+                                if isinstance(api_data['contents'], dict):
+                                        if 'asks' in api_data['contents'].keys():
+                                                asks = api_data['contents']['asks']
+                                        else:
+                                                asks = []
+                                        if 'bids' in api_data['contents'].keys():
+                                                bids = api_data['contents']['bids']
+                                        else:
+                                                bids = []
+                                elif isinstance(api_data['contents'], list):
+                                        asks = []
+                                        bids = []
+                                        for item in api_data['contents']:
+                                                if 'asks' in item.keys():
+                                                        for bitem in item['asks']:
+                                                                if isinstance(bitem, dict):
+                                                                        askprice = bitem['price']
+                                                                        asksize = bitem['size']
+                                                                elif isinstance(bitem, list):
+                                                                        askprice = bitem[0]
+                                                                        asksize = bitem[1]
+                                                                askitem = {
+                                                                        "price": askprice,
+                                                                        "size": asksize
+                                                                }
+                                                                asks.append(askitem)
+                                                if 'bids' in item.keys():
+                                                        for bitem in item['bids']:
+                                                                if isinstance(bitem, dict):
+                                                                        bidprice = bitem['price']
+                                                                        bidsize = bitem['size']
+                                                                elif isinstance(bitem, list):
+                                                                        bidprice = bitem[0]
+                                                                        bidsize = bitem[1]
+                                                                biditem = {
+                                                                        "price": bidprice,
+                                                                        "size": bidsize
+                                                                }
+                                                                bids.append(biditem)
+                                if asks != []:
+                                        for askitem in asks:
+                                                if isinstance(askitem, dict):
+                                                        askprice = askitem['price']
+                                                        asksize = askitem['size']
+                                                elif isinstance(askitem, list):
+                                                        askprice = askitem[0]
+                                                        asksize = askitem[1]
+                                                checkaskfiles(
+                                                        framdiskpath = ramdiskpath,
+                                                        fmarket = market,
+                                                        faskprice = askprice,
+                                                        fasksize = asksize,
+                                                        faskoffset = askoffset,
+                                                )
+                                        checkwidth(
+                                                framdiskpath = ramdiskpath,
+                                                fmarket = market,
+                                                felementname = 'price',
+                                                felementsize = len(askprice)
+                                        )
+                                        checkwidth(
+                                                framdiskpath = ramdiskpath,
+                                                fmarket = market,
+                                                felementname = 'size',
+                                                felementsize = len(asksize)
+                                        )
+                                if bids != []:
+                                        for biditem in bids:
+                                                if isinstance(biditem, dict):
+                                                        bidprice = biditem['price']
+                                                        bidsize = biditem['size']
+                                                elif isinstance(biditem, list):
+                                                        bidprice = biditem[0]
+                                                        bidsize = biditem[1]
+                                                checkbidfiles(
+                                                        framdiskpath = ramdiskpath,
+                                                        fmarket = market,
+                                                        fbidprice = bidprice,
+                                                        fbidsize = bidsize,
+                                                        fbidoffset = bidoffset,
+                                                )
+                                        checkwidth(
+                                                framdiskpath = ramdiskpath,
+                                                fmarket = market,
+                                                felementname = 'price',
+                                                felementsize = len(bidprice)
+                                        )
+                                        checkwidth(
+                                                framdiskpath = ramdiskpath,
+                                                fmarket = market,
+                                                felementname = 'size',
+                                                felementsize = len(bidsize)
+                                        )
+                except Exception as error:
+                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s).  Clearing orderbook" % error)
+                        os.system('rm -rf '+ramdiskpath+'/'+market+'/asks/*')
+                        os.system('rm -rf '+ramdiskpath+'/'+market+'/bids/*')
+                        continue
 
 print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+' v4dydxob.py')
 logger = logging.getLogger("Rotating Log")
@@ -134,120 +237,4 @@ maxwidthprice = 0
 maxwidthsize = 0
 zeroaskoffset = 0
 zerobidoffset = 0
-openconnection()
-while True:
-        try:
-                api_data = ws.recv()
-                api_data = json.loads(api_data)
-                askoffset = api_data['message_id']
-                bidoffset = api_data['message_id']
-                if isinstance(api_data['contents'], dict):
-                        if 'asks' in api_data['contents'].keys():
-                                asks = api_data['contents']['asks']
-                        else:
-                                asks = []
-                        if 'bids' in api_data['contents'].keys():
-                                bids = api_data['contents']['bids']
-                        else:
-                                bids = []
-                elif isinstance(api_data['contents'], list):
-                        asks = []
-                        bids = []
-                        for item in api_data['contents']:
-                                if 'asks' in item.keys():
-                                        for bitem in item['asks']:
-                                                if isinstance(bitem, dict):
-                                                        askprice = bitem['price']
-                                                        asksize = bitem['size']
-                                                elif isinstance(bitem, list):
-                                                        askprice = bitem[0]
-                                                        asksize = bitem[1]
-                                                askitem = {
-                                                        "price": askprice,
-                                                        "size": asksize
-                                                }
-                                                asks.append(askitem)
-                                if 'bids' in item.keys():
-                                        for bitem in item['bids']:
-                                                if isinstance(bitem, dict):
-                                                        bidprice = bitem['price']
-                                                        bidsize = bitem['size']
-                                                elif isinstance(bitem, list):
-                                                        bidprice = bitem[0]
-                                                        bidsize = bitem[1]
-                                                biditem = {
-                                                        "price": bidprice,
-                                                        "size": bidsize
-                                                }
-                                                bids.append(biditem)
-
-
-                if asks != []:
-                        for askitem in asks:
-                                if isinstance(askitem, dict):
-                                        askprice = askitem['price']
-                                        asksize = askitem['size']
-                                elif isinstance(askitem, list):
-                                        askprice = askitem[0]
-                                        asksize = askitem[1]
-                                checkaskfiles(
-                                        framdiskpath = ramdiskpath,
-                                        fmarket = market,
-                                        faskprice = askprice,
-                                        fasksize = asksize,
-                                        faskoffset = askoffset,
-                                )
-                        checkwidth(
-                                framdiskpath = ramdiskpath,
-                                fmarket = market,
-                                felementname = 'price',
-                                felementsize = len(askprice)
-                        )
-                        checkwidth(
-                                framdiskpath = ramdiskpath,
-                                fmarket = market,
-                                felementname = 'size',
-                                felementsize = len(asksize)
-                        )
-                if bids != []:
-                        for biditem in bids:
-                                if isinstance(biditem, dict):
-                                        bidprice = biditem['price']
-                                        bidsize = biditem['size']
-                                elif isinstance(biditem, list):
-                                        bidprice = biditem[0]
-                                        bidsize = biditem[1]
-                                checkbidfiles(
-                                        framdiskpath = ramdiskpath,
-                                        fmarket = market,
-                                        fbidprice = bidprice,
-                                        fbidsize = bidsize,
-                                        fbidoffset = bidoffset,
-                                )
-                        checkwidth(
-                                framdiskpath = ramdiskpath,
-                                fmarket = market,
-                                felementname = 'price',
-                                felementsize = len(bidprice)
-                        )
-                        checkwidth(
-                                framdiskpath = ramdiskpath,
-                                fmarket = market,
-                                felementname = 'size',
-                                felementsize = len(bidsize)
-                        )
-        except KeyboardInterrupt:
-                ws.close()
-                sys.exit(0)
-        except Exception as error:
-                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s).  Clearing orderbook" % error)
-                ws.close()
-                sleep(1)
-                try:
-                        os.system('rm -rf '+ramdiskpath+'/'+market+'/asks/*')
-                        os.system('rm -rf '+ramdiskpath+'/'+market+'/bids/*')
-                        openconnection()
-                except Exception as error:
-                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s)" % error)
-                        ws.close()
-                        sleep(randint(1,10))
+asyncio.get_event_loop().run_until_complete(wsrun(WSINDEXERURL))
