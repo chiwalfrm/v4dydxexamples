@@ -6,7 +6,7 @@ import psycopg
 import sys
 import websockets
 from datetime import datetime
-from time import time, sleep
+from time import time
 
 conn = psycopg.connect("dbname=orderbook user=vmware")
 
@@ -51,7 +51,7 @@ def checkaskfiles(
                         if time2 - time1 > maxtime2:
                                 maxtime2 = time2 - time1
                                 print('checkaskfiles(2): mv new maximum elapsed time:', '{:.2f}'.format(maxtime2))
-                logger.info(datetime1+' Updated REDIS: '+fmarket+':asks:'+faskprice+': '+str('('+fasksize+')').ljust(10)+' '+str(faskoffset))
+                logger.info(datetime1+' Updated: '+fmarket+':asks:'+faskprice+': '+str('('+fasksize+')').ljust(10)+' '+str(faskoffset))
 
 def checkbidfiles(
         fmarket,
@@ -91,7 +91,7 @@ def checkbidfiles(
                         if time2 - time1 > maxtime4:
                                 maxtime4 = time2 - time1
                                 print('checkbidfiles(2): mv new maximum elapsed time:', '{:.2f}'.format(maxtime4))
-                logger.info(datetime1+' Updated REDIS: '+fmarket+':bid:'+fbidprice+': '+str('('+fbidsize+')').ljust(10)+' '+str(fbidoffset))
+                logger.info(datetime1+' Updated: '+fmarket+':bid:'+fbidprice+': '+str('('+fbidsize+')').ljust(10)+' '+str(fbidoffset))
 
 def checkwidth(
         framdiskpath,
@@ -134,7 +134,7 @@ def process_message(message):
         elif offset == -1:
                 time1=time()
                 index1 += 1
-                print('Table:', 'V4'+market1+market2+str(index1))
+                print('Table:', 'V4'+market1+'_'+market2+'_'+str(index1))
                 mycursor = conn.execute("CREATE TABLE V4"+market1+'_'+market2+'_'+str(index1)+" (type varchar(3) NOT NULL, price float NOT NULL, size float NOT NULL, offset1 bigint NOT NULL, datetime varchar(19) NOT NULL, PRIMARY KEY (type, price));")
                 conn.commit()
                 mycursor = conn.execute("INSERT INTO v4orderbookindex VALUES ('"+market+"', "+str(index1)+") ON CONFLICT (market1) DO UPDATE SET index1 = "+str(index1)+";")
@@ -146,8 +146,6 @@ def process_message(message):
                 if time2 - time1 > maxtime7:
                         maxtime7 = time2 - time1
                         print('wsrun(): mv new maximum elapsed time:', '{:.2f}'.format(maxtime7))
-                api_data2 = json.loads(message)
-                print(api_data2)
         else:
                 for item in api_data2['contents'].items():
                         type1 = item[0]
@@ -240,7 +238,7 @@ else:
         mycursor = conn.execute("SELECT index1 FROM v4orderbookindex WHERE market1 = '"+market+"';")
         conn.commit()
         index1 = mycursor.fetchone()[0] + 1
-print('Table:', 'V4'+market1+market2+str(index1))
+print('Table:', 'V4'+market1+'_'+market2+'_'+str(index1))
 mycursor = conn.execute("CREATE TABLE V4"+market1+'_'+market2+'_'+str(index1)+" (type varchar(3) NOT NULL, price float NOT NULL, size float NOT NULL, offset1 bigint NOT NULL, datetime varchar(19) NOT NULL, PRIMARY KEY (type, price));")
 conn.commit()
 mycursor = conn.execute("INSERT INTO v4orderbookindex VALUES ('"+market+"', "+str(index1)+") ON CONFLICT (market1) DO UPDATE SET index1 = "+str(index1)+";")
@@ -248,7 +246,7 @@ conn.commit()
 time2=time()
 if time2 - time1 > maxtime8:
         maxtime8 = time2 - time1
-        print('main(): mv new maximum elapsed time:', '{:.2f}'.format(maxtime8))
+        print('main(client): mv new maximum elapsed time:', '{:.2f}'.format(maxtime8))
 
 #logging.basicConfig(
 #       format="%(message)s",
