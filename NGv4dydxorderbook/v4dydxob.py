@@ -4,6 +4,7 @@ import sys
 import websockets
 from datetime import datetime
 from multiprocessing import Pool, cpu_count
+from time import time
 
 from v4dydxobclient import process_message
 
@@ -21,20 +22,32 @@ api_data = {
         "id": market,
 }
 
-async def wsrun(uri, pool):
+async def wsrun(uri, pool, restartflag):
         async for websocket in websockets.connect(uri):
-                try:
-                        await websocket.send(json.dumps(api_data))
-                        while True:
-                                pool.apply_async(process_message, args=(await websocket.recv(),))
-                except Exception as error:
-                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s).  Clearing orderbook..." % error)
+                await websocket.send(json.dumps(api_data))
+                if restartflag == 1:
                         pool.apply_async(process_message, args=(json.dumps({'message_id': -1}),))
-                        continue
+                while True:
+                        pool.apply_async(process_message, args=(await websocket.recv(),))
 
+maxtime9 = 0
 def main():
-        pool = Pool(1)
-        asyncio.run(wsrun(WSINDEXERURL, pool))
+        restartflag = 0
+        while True:
+                try:
+                        pool = Pool(1)
+                        asyncio.run(wsrun(WSINDEXERURL, pool, restartflag))
+                except Exception as error:
+                        time1=time()
+                        pool.close()
+                        pool.join()
+                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s).  Clearing orderbook..." % error)
+                        restartflag = 1
+                        time2=time()
+                        if time2 - time1 > maxtime9:
+                                maxtime9 = time2 - time1
+                                print('main(server): mv new maximum elapsed time:', '{:.2f}'.format(maxtime9))
+                        continue
 
 if __name__ == '__main__': # Required by Windows, for example
         main()
