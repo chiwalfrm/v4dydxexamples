@@ -30,24 +30,21 @@ async def wsrun(uri, pool, restartflag):
                 while True:
                         pool.apply_async(process_message, args=(await websocket.recv(),))
 
-maxtime9 = 0
 def main():
+        maxtime9 = 0
         restartflag = 0
+        pool = Pool(1)
         while True:
                 try:
-                        pool = Pool(1)
                         asyncio.run(wsrun(WSINDEXERURL, pool, restartflag))
                 except Exception as error:
                         time1=time()
-                        pool.close()
-                        pool.join()
                         print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s).  Clearing orderbook..." % error)
                         restartflag = 1
                         time2=time()
                         if time2 - time1 > maxtime9:
                                 maxtime9 = time2 - time1
                                 print('main(server): mv new maximum elapsed time:', '{:.2f}'.format(maxtime9))
-                        continue
 
 if __name__ == '__main__': # Required by Windows, for example
         main()
