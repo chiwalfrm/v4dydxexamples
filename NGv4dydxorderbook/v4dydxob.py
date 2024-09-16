@@ -1,10 +1,14 @@
 import asyncio
 import json
+import psycopg
 import sys
-import websockets
 from datetime import datetime
-from multiprocessing import Pool, cpu_count
+from concurrent.futures import ProcessPoolExecutor
 from time import time
+from tornado.ioloop import IOLoop, PeriodicCallback
+from tornado import gen
+from tornado.websocket import websocket_connect
+from websocket import create_connection
 
 from v4dydxobclient import process_message
 
@@ -12,39 +16,67 @@ WSINDEXERURL = 'wss://indexer.dydx.trade/v4/ws'
 #WSINDEXERURL = 'wss://indexer.v4testnet.dydx.exchange/v4/ws'
 #WSINDEXERURL = 'wss://indexer.v4staging.dydx.exchange/v4/ws'
 
-if len(sys.argv) < 2:
-        market = 'BTC-USD'
-else:
-        market = sys.argv[1]
+conn = psycopg.connect("dbname=orderbook user=vmware")
+
+market = sys.argv[1]
 api_data = {
         "type": "subscribe",
         "channel": "v4_orderbook",
         "id": market,
 }
 
-async def wsrun(uri, pool, restartflag):
-        async for websocket in websockets.connect(uri):
-                await websocket.send(json.dumps(api_data))
-                if restartflag == 1:
-                        pool.apply_async(process_message, args=(json.dumps({'message_id': -1}),))
+class Client(object):
+        def __init__(self, url, timeout):
+                self.url = url
+                self.timeout = timeout
+                self.ioloop = IOLoop.instance()
+                self.ws = None
+                self.connect()
+                PeriodicCallback(self.keep_alive, 20000).start()
+                self.ioloop.start()
+
+        @gen.coroutine
+        def connect(self):
+                print("DEBUG:trying to connect")
+                try:
+                        self.ws = yield websocket_connect(self.url)
+                except Exception as e:
+                        print("DEBUG:connection error")
+                else:
+                        yield self.ws.write_message(json.dumps(api_data))
+                        print("DEBUG:connected")
+                        self.run()
+
+        @gen.coroutine
+        def run(self):
+                loop = asyncio.get_running_loop()
                 while True:
-                        pool.apply_async(process_message, args=(await websocket.recv(),))
+                        msg = yield self.ws.read_message()
+                        if msg is None:
+                                self.ws = None
+                                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (connection closed).  Clearing orderbook...")
+                                break
+                        else:
+                                mycursor = conn.execute("UPDATE v4server SET messageid = "+str(json.loads(msg)['message_id'])+" WHERE market1 = '"+market+"';")
+                                conn.commit()
+                                loop.run_in_executor(pool, process_message, msg)
+                pool.shutdown(wait=False, cancel_futures=True)
+                exit()
+
+        def keep_alive(self):
+                if self.ws is None:
+                        self.connect()
+                else:
+                        self.ws.write_message("keep alive")
 
 def main():
-        maxtime9 = 0
-        restartflag = 0
-        pool = Pool(1)
-        while True:
-                try:
-                        asyncio.run(wsrun(WSINDEXERURL, pool, restartflag))
-                except Exception as error:
-                        time1=time()
-                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (%s).  Clearing orderbook..." % error)
-                        restartflag = 1
-                        time2=time()
-                        if time2 - time1 > maxtime9:
-                                maxtime9 = time2 - time1
-                                print('main(server): mv new maximum elapsed time:', '{:.2f}'.format(maxtime9))
+        global pool
+        mycursor = conn.execute("DELETE FROM v4server WHERE market1 = '"+market+"';")
+        conn.commit()
+        mycursor = conn.execute("INSERT INTO v4server VALUES ('"+market+"', -1);")
+        conn.commit()
+        pool = ProcessPoolExecutor(1)
+        client = Client(WSINDEXERURL, 5)
 
 if __name__ == '__main__': # Required by Windows, for example
         main()
