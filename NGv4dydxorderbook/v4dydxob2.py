@@ -117,8 +117,8 @@ market2 = marketarray[1]
 index1 = None
 while index1 == None:
         mycursor = conn.execute("SELECT index1 FROM v4orderbookindex WHERE market1 = '"+market+"';")
-        conn.commit()
         index1 = mycursor.fetchone()[0]
+        conn.commit()
         sleep(1)
 while True:
         starttime = datetime.now()
@@ -139,11 +139,10 @@ while True:
         askarray = []
         bidarray = []
         mycursor = conn.execute("SELECT index1 FROM v4orderbookindex WHERE market1 = '"+market+"';")
-        conn.commit()
         index1 = mycursor.fetchone()[0]
+        conn.commit()
         print('Table:', 'V4'+market1+'_'+market2+'_'+str(index1))
         mycursor = conn.execute("SELECT * FROM V4"+market1+'_'+market2+'_'+str(index1)+";")
-        conn.commit()
         for member in mycursor:
                 type1 = member[0]
                 price = member[1]
@@ -154,6 +153,7 @@ while True:
                         askarray.append([price, size, offset, datetime1])
                 elif type1 == 'bid':
                         bidarray.append([price, size, offset, datetime1])
+        conn.commit()
         askarray.sort()
         bidarray.sort(reverse=True)
         if len(bidarray) == 0 or len(askarray) == 0:
