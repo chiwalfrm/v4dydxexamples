@@ -1,6 +1,5 @@
 import os
 import psycopg
-import signal
 import sys
 from datetime import datetime
 from requests import get
@@ -69,9 +68,6 @@ NC = '\033[0m' # No Color
 REDWHITE = '\033[0;31m\u001b[47m'
 GREENWHITE = '\033[0;32m\u001b[47m'
 
-def handler(signum, frame):
-        sys.exit()
-
 def checkmarketdata(file):
         if os.path.isfile(ramdiskpath+'/'+market+'/'+file) == True:
                 fname = []
@@ -96,7 +92,6 @@ def checkmarketdata(file):
 dydxticksize = 0
 print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+' v4dydxob2.py')
 sep = " "
-signal.signal(signal.SIGINT, handler)
 if len(sys.argv) < 2:
         market = 'BTC-USD'
 else:
