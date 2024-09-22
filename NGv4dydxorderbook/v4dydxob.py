@@ -4,11 +4,9 @@ import psycopg
 import sys
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
-from time import time
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado import gen
 from tornado.websocket import websocket_connect
-from websocket import create_connection
 
 from v4dydxobclient import process_message
 
@@ -67,7 +65,7 @@ class Client(object):
                 if self.ws is None:
                         self.connect()
                 else:
-                        self.ws.write_message("keep alive")
+                        self.ws.ping()
 
 def main():
         global pool
