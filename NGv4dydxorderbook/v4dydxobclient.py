@@ -101,29 +101,22 @@ def checkwidth(
         global maxwidthprice
         global maxwidthsize
         global maxtime5
-        global maxtime6
+        time1=time()
         if felementname == 'price' and felementsize > maxwidthprice:
-                time1=time()
                 fp = open(framdiskpath+'/'+fmarket+'/maxwidth'+felementname, "w")
                 fp.write(str(felementsize)+'\n')
                 fp.close()
-                time2=time()
-                delta = round(time2 - time1, 2)
-                if delta > maxtime5:
-                        maxtime5 = delta
-                        print('DEBUG:checkwidth(1): new maximum elapsed time:', maxtime5)
                 maxwidthprice = felementsize
         elif felementname == 'size' and felementsize > maxwidthsize:
-                time1=time()
                 fp = open(framdiskpath+'/'+fmarket+'/maxwidth'+felementname, "w")
                 fp.write(str(felementsize)+'\n')
                 fp.close()
-                time2=time()
-                delta = round(time2 - time1, 2)
-                if delta > maxtime6:
-                        maxtime6 = delta
-                        print('DEBUG:checkwidth(2): new maximum elapsed time:', maxtime6)
                 maxwidthsize = felementsize
+        time2=time()
+        delta = round(time2 - time1, 2)
+        if delta > maxtime5:
+                maxtime5 = delta
+                print('DEBUG:checkwidth(1): new maximum elapsed time:', maxtime5)
 
 def process_message(message):
         api_data2 = json.loads(message)
@@ -181,7 +174,6 @@ maxtime2=0
 maxtime3=0
 maxtime4=0
 maxtime5=0
-maxtime6=0
 maxtime7=0
 print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+' v4dydxob.py')
 logger = logging.getLogger("Rotating Log")
