@@ -3,26 +3,25 @@ import json
 import psycopg
 import sys
 from datetime import datetime
+from dydx3 import constants
 from concurrent.futures import ProcessPoolExecutor
-from time import time
 from tornado.ioloop import IOLoop, PeriodicCallback
 from tornado import gen
 from tornado.websocket import websocket_connect
-from websocket import create_connection
 
-from v4dydxobclient import process_message
+from dydxobclient import process_message
 
-WSINDEXERURL = 'wss://indexer.dydx.trade/v4/ws'
-#WSINDEXERURL = 'wss://indexer.v4testnet.dydx.exchange/v4/ws'
-#WSINDEXERURL = 'wss://indexer.v4staging.dydx.exchange/v4/ws'
+clientws = constants.WS_HOST_MAINNET
+#clientws = constants.WS_HOST_SEPOLIA
 
 conn = psycopg.connect("dbname=orderbook user=vmware")
 
 market = sys.argv[1]
 api_data = {
         "type": "subscribe",
-        "channel": "v4_orderbook",
+        "channel": "v3_orderbook",
         "id": market,
+        "includeOffsets": True,
 }
 
 class Client(object):
@@ -57,7 +56,7 @@ class Client(object):
                                 print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "WebSocket message failed (connection closed).  Clearing orderbook...")
                                 break
                         else:
-                                mycursor = conn.execute("UPDATE v4server SET messageid = "+str(json.loads(msg)['message_id'])+" WHERE market1 = '"+market+"';")
+                                mycursor = conn.execute("UPDATE server SET messageid = "+str(json.loads(msg)['message_id'])+" WHERE market1 = '"+market+"';")
                                 conn.commit()
                                 loop.run_in_executor(pool, process_message, msg)
                 pool.shutdown(wait=False, cancel_futures=True)
@@ -67,16 +66,16 @@ class Client(object):
                 if self.ws is None:
                         self.connect()
                 else:
-                        self.ws.write_message("keep alive")
+                        self.ws.ping()
 
 def main():
         global pool
-        mycursor = conn.execute("DELETE FROM v4server WHERE market1 = '"+market+"';")
+        mycursor = conn.execute("DELETE FROM server WHERE market1 = '"+market+"';")
         conn.commit()
-        mycursor = conn.execute("INSERT INTO v4server VALUES ('"+market+"', -1);")
+        mycursor = conn.execute("INSERT INTO server VALUES ('"+market+"', -1);")
         conn.commit()
         pool = ProcessPoolExecutor(1)
-        client = Client(WSINDEXERURL, 5)
+        client = Client(clientws, 5)
 
 if __name__ == '__main__': # Required by Windows, for example
         main()
