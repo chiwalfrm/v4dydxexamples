@@ -34,7 +34,7 @@ logger = logging.getLogger("Rotating Log")
 logger.setLevel(logging.INFO)
 if sys.platform == "linux" or sys.platform == "linux2":
         # linux
-        ramdiskpath = '/mnt/ramdiskv4dydxl2bot2'
+        ramdiskpath = '/mnt/scratch'
         if os.access(ramdiskpath, os.W_OK) != True:
                 print('Warning:', ramdiskpath, 'is not writable.  Using /tmp')
                 ramdiskpath = '/tmp'
