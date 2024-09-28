@@ -11,3 +11,6 @@ Latest documentation: https://docs.google.com/document/d/14DYBOoGQn36I2dxg-ycMoB
 
 4) v4dydxorderbook/ (DEPRECATED)
 https://x.com/LawrenceChiu14/status/1697815207047791027
+
+5) v4demodydxcreateorder.py
+https://x.com/LawrenceChiu14/status/1840010561788022864
