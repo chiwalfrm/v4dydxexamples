@@ -23,15 +23,22 @@ DYDX_ORDER_PRICE = 1000
 DYDX_ORDER_EXPIRATION = 60
 #===========================================
 
-MAINNET = make_mainnet(
+#Uncomment either the first NETWORK or the second depending on mainnet or testnet
+NETWORK = make_mainnet(
         rest_indexer="https://indexer.dydx.trade",
         websocket_indexer="wss://indexer.dydx.trade/v4/ws",
         node_url="dydx-grpc.publicnode.com",
 )
 
+#NETWORK = make_testnet(
+#       rest_indexer="https://dydx-testnet.imperator.co",
+#       websocket_indexer="wss://indexer.v4testnet.dydx.exchange/v4/ws",
+#       node_url="test-dydx-grpc.kingnodes.com",
+#)
+
 async def main():
-        node = await NodeClient.connect(MAINNET.node)
-        indexer = IndexerClient(MAINNET.rest_indexer)
+        node = await NodeClient.connect(NETWORK.node)
+        indexer = IndexerClient(NETWORK.rest_indexer)
         market = Market(
                 (await indexer.markets.get_perpetual_markets(DYDX_ORDER_MARKET))["markets"][DYDX_ORDER_MARKET]
         )
