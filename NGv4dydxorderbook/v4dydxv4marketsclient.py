@@ -343,10 +343,10 @@ logger = logging.getLogger("Rotating Log")
 logger.setLevel(logging.INFO)
 if sys.platform == "linux" or sys.platform == "linux2":
         # linux
-        ramdiskpath = '/mnt/ramdisk5'
+        ramdiskpath = '/mnt/scratch'
 elif sys.platform == "darwin":
         # OS X
-        ramdiskpath = '/Volumes/RAMDisk5'
+        ramdiskpath = '/Volumes/scratch'
 
 handler = logging.handlers.RotatingFileHandler(ramdiskpath+'/v4dydxv4markets.log',
         maxBytes = 2097152,
