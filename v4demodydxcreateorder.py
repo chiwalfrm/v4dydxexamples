@@ -1,12 +1,13 @@
 import asyncio
 import random
+from functools import partial
 
 from v4_proto.dydxprotocol.clob.order_pb2 import Order
 
 from dydx_v4_client import MAX_CLIENT_ID, OrderFlags
 from dydx_v4_client.indexer.rest.constants import OrderType, OrderExecution
 from dydx_v4_client.indexer.rest.indexer_client import IndexerClient
-from dydx_v4_client.network import make_mainnet
+from dydx_v4_client.network import make_mainnet, make_testnet, make_secure, make_insecure, mainnet_node, testnet_node
 from dydx_v4_client.node.client import NodeClient
 from dydx_v4_client.node.market import Market, since_now
 from dydx_v4_client.wallet import Wallet
@@ -15,30 +16,54 @@ from dydx_v4_client.wallet import Wallet
 DYDX_MNEMONIC = '<FILL THIS OUT>'
 DYDX_ADDRESS = '<FILL THIS OUT>'
 DYDX_SUBACCOUNT = 0
+DYDX_NETWORK = 'testnet'
+DYDX_SECURE = False
 DYDX_ORDER_MARKET = 'BTC-USD'
 DYDX_ORDER_TYPE = OrderType.LIMIT
 DYDX_ORDER_SIDE = Order.Side.SIDE_BUY
 DYDX_ORDER_SIZE = 0.001
-DYDX_ORDER_PRICE = 1000
+DYDX_ORDER_PRICE = 40000
 DYDX_ORDER_EXPIRATION = 60
 #===========================================
 
-#Uncomment either the first NETWORK or the second depending on mainnet or testnet
-NETWORK = make_mainnet(
-        rest_indexer="https://indexer.dydx.trade",
-        websocket_indexer="wss://indexer.dydx.trade/v4/ws",
-        node_url="dydx-grpc.publicnode.com",
-)
-
-#NETWORK = make_testnet(
-#       rest_indexer="https://dydx-testnet.imperator.co",
-#       websocket_indexer="wss://indexer.v4testnet.dydx.exchange/v4/ws",
-#       node_url="test-dydx-grpc.kingnodes.com",
-#)
+if DYDX_NETWORK == 'mainnet':
+        if DYDX_SECURE == True:
+                NETWORK = partial(
+                        make_secure,
+                        mainnet_node,
+                        rest_indexer="https://indexer.dydx.trade",
+                        websocket_indexer="wss://indexer.dydx.trade/v4/ws",
+                        node_url="dydx-grpc.publicnode.com",
+                )
+        else:
+                NETWORK = partial(
+                        make_insecure,
+                        mainnet_node,
+                        rest_indexer="https://indexer.dydx.trade",
+                        websocket_indexer="wss://indexer.dydx.trade/v4/ws",
+                        node_url="<FILL THIS OUT>:9090",
+                )
+elif DYDX_NETWORK == 'testnet':
+        if DYDX_SECURE == True:
+                NETWORK = partial(
+                        make_secure,
+                        testnet_node,
+                        rest_indexer="https://dydx-testnet.imperator.co",
+                        websocket_indexer="wss://indexer.v4testnet.dydx.exchange/v4/ws",
+                        node_url="test-dydx-grpc.kingnodes.com",
+                )
+        else:
+                NETWORK = partial(
+                        make_insecure,
+                        testnet_node,
+                        rest_indexer="https://dydx-testnet.imperator.co",
+                        websocket_indexer="wss://indexer.v4testnet.dydx.exchange/v4/ws",
+                        node_url="<FILL THIS OUT>:9090",
+                )
 
 async def main():
-        node = await NodeClient.connect(NETWORK.node)
-        indexer = IndexerClient(NETWORK.rest_indexer)
+        node = await NodeClient.connect(NETWORK().node)
+        indexer = IndexerClient(NETWORK().rest_indexer)
         market = Market(
                 (await indexer.markets.get_perpetual_markets(DYDX_ORDER_MARKET))["markets"][DYDX_ORDER_MARKET]
         )
