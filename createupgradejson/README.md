@@ -8,12 +8,12 @@ where ```<markettuple>``` is a colon-separated tuple consisting of: ```market:li
 
 For example: ```ZORA-USD:2:y``` means
 - ZORA-USD market
-- 2 is the new liquidity tier
+- 2 is the new liquidity tier for Long-Tail (currently 7 for IML 5x)
 - y means upgrade it from ISOLATED to CROSS
 
 and ```BONK-USD:1:n``` means:
 - BONK-USD market
-- 1 is the new liquidity tier
+- 1 is the new liquidity tier for Small-Cap (currently 2 for Long-Tail)
 - n means don't upgrade it (because it is already CROSS)
 
 Example: ```./upgradecrossmarkets.sh ZORA-USD:2:y BONK-USD:1:n```
