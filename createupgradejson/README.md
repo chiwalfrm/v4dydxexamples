@@ -1,4 +1,4 @@
-These scripts create the json file to upgrade markets (e.g. from ISOLATED to CROSS, and/or change the liquidity tier)
+These scripts create the json file to upgrade markets (e.g. from ISOLATED to CROSS, and/or change the liquidity tier)<br>
 Put all files in a directory and then run ```upgradecrossmarkets.sh```.
 
 See ```liquiditytiers.txt``` for a complete list of all liquidity tiers.
