@@ -1,0 +1,19 @@
+These scripts create the json file to upgrade markets (e.g. from ISOLATED to CROSS, and/or upgrade the liquidity tier)
+Put all files in a directory and then run upgradecrossmarkets.sh.
+
+See liquiditytiers.txt for a complete list of all liquidity tiers.
+
+Syntax: ./delistmarkets.sh <markettuple1> <markettuple2> ...
+where <markettuple> is a colon-separated tuple consisting of: market:liquiditytier:cross_y/n
+
+For example: ZORA-USD:2:y means
+- ZORA-USD market
+- 2 is the new liquidity tier
+- y means upgrade it from ISOLATED to CROSS
+
+and BONK-USD:1:n means:
+- BONK-USD market
+- 1 is the new liquidity tier
+- n means don't upgrade it (because it is already CROSS)
+
+Example: ./upgradecrossmarkets.sh ZORA-USD:2:y BONK-USD:1:n
