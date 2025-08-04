@@ -1,5 +1,5 @@
 **These scripts create the json file to delist markets.**<br>
-Put all files in a directory and then run delistmarkets.sh.
+Put all files in a directory and then run ```delistmarkets.sh```.
 <br>
 <br>
 Syntax: ```./delistmarkets.sh <market1> <market2> ...```<br>
