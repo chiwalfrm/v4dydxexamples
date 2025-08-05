@@ -19,5 +19,5 @@ and ```BONK-USD:1:n``` means:
 
 Example: ```./upgradecrossmarkets.sh ZORA-USD:2:y BONK-USD:1:n```
 
-https://github.com/user-attachments/assets/b5068f47-882c-4780-906f-4ba168db3a0b
+https://github.com/user-attachments/assets/ffaec150-24cc-4107-8ec6-22ed70f1b37f
 
