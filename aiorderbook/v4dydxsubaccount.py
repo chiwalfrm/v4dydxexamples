@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+import time
 import uvloop
 from picows import ws_connect, WSFrame, WSTransport, WSListener, WSMsgType
 
@@ -27,6 +28,7 @@ class DydxClientListener(WSListener):
                 message = frame.get_payload_as_ascii_text()
                 parsed_message = json.loads(message)
 #                print(json.dumps(parsed_message, indent=2))
+                parsed_message['timestamp3'] = time.time()
                 print(parsed_message)
             except Exception as e:
                 print(f"Exception {e} on message {message}")
