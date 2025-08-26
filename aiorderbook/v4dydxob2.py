@@ -1,348 +1,349 @@
+import argparse
+import requests
+import time
 import os
-import psycopg
-import sys
-from datetime import datetime
-from requests import get
-from time import sleep
-remove_crossed_prices = True
+import asyncio
+import asyncpg
+from typing import List, Tuple, Dict
+from decimal import Decimal
+import datetime
 
 INDEXERURL = 'https://indexer.dydx.trade/v4'
 #INDEXERURL = 'https://indexer.v4testnet.dydx.exchange/v4'
 #INDEXERURL = 'https://indexer.v4staging.dydx.exchange/v4'
 
-if os.environ.get('ORDERBOOKSERVER') != None and os.environ.get('ORDERBOOKSERVER') != '':
-        mysqlhost = os.environ.get('ORDERBOOKSERVER')
-else:
-        mysqlhost = 'localhost'
+def parse_args():
+    parser = argparse.ArgumentParser(description="dYdX v4 Orderbook Client")
+    parser.add_argument("--ip", type=str, default="localhost", help="Server IP address (default: localhost)")
+    parser.add_argument("--market", type=str, default="BTC-USD", help="Market to fetch orderbook for (e.g., BTC-USD, PEPE-USD) (default: BTC-USD)")
+    parser.add_argument("--depth", type=int, default=10, help="Number of orderbook rows to display (default: 10)")
+    parser.add_argument("--interval", type=float, default=1.0, help="Interval between requests in seconds when looping (default: 1.0)")
+    return parser.parse_args()
 
-conn = psycopg.connect("dbname=orderbook user=vmware password='orderbook' host='"+mysqlhost+"'")
+def get_clob_pair_id(market: str) -> int:
+    try:
+        response = requests.get(f"{INDEXERURL}/perpetualMarkets", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        markets = data.get("markets", {})
+        if market not in markets:
+            raise ValueError(f"Market {market} not found in API response")
+        clob_pair_id = int(markets[market]["clobPairId"])
+        return clob_pair_id
+    except (requests.exceptions.RequestException, ValueError, KeyError) as e:
+        print(f"Error fetching clobPairId for {market}: {e}")
+        raise
 
-widthmarketstats = 24
-#widthprice = 10
-#widthsize = 10
-widthprice = 13
-widthsize = 10
-widthoffset = 11
+async def get_latest_trade(pool: asyncpg.Pool, market: str) -> dict:
+    market_part, base_part = market.split('-')
+    table_name = f"v4trades{market_part.lower()}_{base_part.lower()}"
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                f"SELECT createdat, createdatheight, price, side, size "
+                f"FROM {table_name} ORDER BY datetime DESC LIMIT 1"
+            )
+            if row:
+                return {
+                    "createdat": row["createdat"].strftime("%Y-%m-%dT%H:%M:%S"),
+                    "createdatheight": row["createdatheight"],
+                    "price": float(row["price"]),
+                    "side": row["side"],
+                    "size": float(row["size"])
+                }
+            return {}
+    except Exception as e:
+        print(f"Error querying latest trade from {table_name}: {e}")
+        return {}
 
-#dydxmarket
-def getticksize():
-        if os.path.isfile(ramdiskpath+"/"+dydxmarket+"/tickSize") == True:
-                return os.popen("tail -1 "+ramdiskpath+"/"+dydxmarket+"/tickSize | awk '{print $1}'").read()[:-1]
-        elif os.path.isfile(ramdiskpath+"/v4dydxmarketdata/"+dydxmarket+"/tickSize") == True:
-                return os.popen("tail -1 "+ramdiskpath+"/v4dydxmarketdata/"+dydxmarket+"/tickSize | awk '{print $1}'").read()[:-1]
-        count = 0
+async def get_market_data(pool: asyncpg.Pool, market: str) -> dict:
+    query = (
+        f"SELECT pricechange24h, nextfundingrate, openinterest, trades24h, volume24h, "
+        f"effectiveat, effectiveatheight, marketid, oracleprice, datetime "
+        f"FROM v4markets WHERE market_id = $1"
+    )
+    try:
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(query, market)
+            if row:
+                return {
+                    "pricechange24h": row["pricechange24h"],
+                    "nextfundingrate": row["nextfundingrate"],
+                    "openinterest": row["openinterest"],
+                    "trades24h": row["trades24h"],
+                    "volume24h": row["volume24h"],
+                    "effectiveat": row["effectiveat"].strftime("%Y-%m-%dT%H:%M:%S") if row["effectiveat"] else "",
+                    "effectiveatheight": row["effectiveatheight"] if row["effectiveatheight"] is not None else 0,
+                    "marketid": row["marketid"] if row["marketid"] is not None else 0,
+                    "oracleprice": row["oracleprice"],
+                    "datetime": row["datetime"].strftime("%Y-%m-%dT%H:%M:%S")
+                }
+            return {}
+    except Exception as e:
+        print(f"Error querying market data for market_id={market}: {e}")
+        return {}
+
+def resolve_crossed_order_book(bid_list: List[Tuple[Decimal, Decimal]], ask_list: List[Tuple[Decimal, Decimal]]) -> Tuple[List[Tuple[Decimal, Decimal]], List[Tuple[Decimal, Decimal]]]:
+    bid_list = bid_list.copy()
+    ask_list = ask_list.copy()
+    while bid_list and ask_list and bid_list[0][0] >= ask_list[0][0]:
+        bid_price, bid_size = bid_list[0]
+        ask_price, ask_size = ask_list[0]
+        if bid_size > ask_size:
+            bid_list[0] = (bid_price, bid_size - ask_size)
+            ask_list.pop(0)
+        elif bid_size < ask_size:
+            ask_list[0] = (ask_price, ask_size - bid_size)
+            bid_list.pop(0)
+        else:
+            ask_list.pop(0)
+            bid_list.pop(0)
+    return bid_list, ask_list
+
+def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], market: str, depth: int, latest_trade: dict, market_data: dict, runtime: str):
+    # Convert to Decimal for sorting and cross-resolution
+    bid_decimals = [(Decimal(price), Decimal(size)) for price, size in bids]
+    ask_decimals = [(Decimal(price), Decimal(size)) for price, size in asks]
+
+    # Resolve crossed orderbook
+    resolved_bids, resolved_asks = resolve_crossed_order_book(bid_decimals, ask_decimals)
+
+    # Create price maps to preserve original strings
+    bid_price_map: Dict[Decimal, str] = {Decimal(price): price for price, _ in bids}
+    ask_price_map: Dict[Decimal, str] = {Decimal(price): price for price, _ in asks}
+
+    # Collect displayed prices and sizes for dynamic widths and precision
+    price_strs: List[str] = []
+    size_strs: List[str] = []
+    for lst, price_map in [(resolved_bids, bid_price_map), (resolved_asks, ask_price_map)]:
+        for price_dec, size_dec in lst[:depth]:
+            price_str = price_map.get(price_dec, str(price_dec))
+            size_str = str(size_dec)
+            price_strs.append(price_str)
+            size_strs.append(size_str)
+
+    # Find maximum decimal places in displayed prices
+    max_decimals = 0
+    for price_str in price_strs:
         try:
-                r = get(url = INDEXERURL+'/perpetualMarkets', params = {
-                        'ticker': dydxmarket
-                })
-                r.raise_for_status()
-                if r.status_code == 200:
-                        return r.json()['markets'][dydxmarket]['tickSize']
-                else:
-                        print('Bad requests status code:', r.status_code)
-                        count += 1
-                        if count > 9:
-                                print('getticksize() Market not found', dydxmarket)
-                                return None
-        except Exception as error:
-                count += 1
-                print('Error:', datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "getticksize() api query failed (%s)" % error)
-                print('getticksize() exception, will retry... count='+str(count))
-                if count > 9:
-                        print('Error: getticksize() Market not found', dydxmarket)
-                        return None
+            fractional_part = price_str.split('.')[-1] if '.' in price_str else ''
+            max_decimals = max(max_decimals, len(fractional_part.rstrip('0')))
+        except ValueError:
+            continue
 
-if sys.platform == "linux" or sys.platform == "linux2":
-        # linux
-        ramdiskpath = '/mnt/ramdisk5'
-elif sys.platform == "darwin":
-        # OS X
-        ramdiskpath = '/Volumes/RAMDisk5'
-#Note: regular output needs 103 columns, compact 67, ultracompact 39
+    # Format prices with space padding for alignment
+    formatted_price_strs: List[str] = []
+    for price_str in price_strs:
+        try:
+            if '.' in price_str:
+                integer_part, fractional_part = price_str.split('.')
+                fractional_part = fractional_part.rstrip('0')
+                fractional_part = fractional_part + ' ' * (max_decimals - len(fractional_part))
+                formatted_price_str = f"{integer_part}.{fractional_part}"
+            else:
+                formatted_price_str = price_str + ' ' * (max_decimals + 1)  # +1 for decimal point
+            formatted_price_strs.append(formatted_price_str)
+        except ValueError:
+            formatted_price_strs.append(price_str)
 
-RED = '\033[0;31m'
-GREEN = '\033[0;32m'
-YELLOW = '\033[0;33m'
-CYAN = '\033[0;36m'
-NC = '\033[0m' # No Color
-REDWHITE = '\033[0;31m\u001b[47m'
-GREENWHITE = '\033[0;32m\u001b[47m'
+    # Calculate maximum string lengths for alignment, ensuring minimum width of 4
+    max_price_len = max(max((len(p) for p in formatted_price_strs), default=0), 4)  # Minimum len("BidP")
+    max_size_len = max(max((len(s) for s in size_strs), default=0), 4)  # Minimum len("BidQ")
 
-dydxticksize = 0
-print(datetime.now().strftime("%Y-%m-%d %H:%M:%S")+' v4dydxob2.py')
-sep = " "
-if len(sys.argv) < 2:
-        market = 'BTC-USD'
-else:
-        market = sys.argv[1]
-if len(sys.argv) < 3:
-        depth = 10
-else:
-        depth = int(sys.argv[2])
-marketarray = market.split('-')
-market1 = marketarray[0]
-if ',' in market1:
-        splitmarket1 = market1.split(',')
-        market1 = splitmarket1[0]
-market2 = marketarray[1]
-while True:
-        starttime = datetime.now()
-        mycursor = conn.execute("SELECT * FROM v4trades"+market1+'_'+market2+" ORDER BY datetime DESC LIMIT 1;")
-        record = mycursor.fetchone()
-        conn.commit()
-        id = record[0]
-        fsize = record[1]
-        fprice = record[2]
-        fside = record[3]
-        fcreatedat = record[4]
-        ftype = record[5]
-        fcreatedatheight = record[6]
-        datetime = record[7]
-        askarray = []
-        bidarray = []
-        print('Table:', 'v4'+market1+'_'+market2)
-        mycursor = conn.execute("SELECT * FROM v4"+market1+'_'+market2+";")
-        for member in mycursor:
-                type1 = member[0]
-                price = member[1]
-                size = member[2]
-                offset = member[3]
-                datetime1 = member[4]
-                if type1 == 'ask':
-                        askarray.append([price, size, offset, datetime1])
-                elif type1 == 'bid':
-                        bidarray.append([price, size, offset, datetime1])
-        conn.commit()
-        askarray.sort()
-        bidarray.sort(reverse=True)
-        if len(bidarray) == 0 or len(askarray) == 0:
-                print('Warning: bids or asks empty', str(len(bidarray)), str(len(askarray)), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                if os.access(ramdiskpath+'/'+market, os.W_OK):
-                        fp = open(ramdiskpath+'/'+market+'/TRAPemptyarrays', "a")
-                        fp.write(str(len(bidarray))+','+str(len(askarray))+',0,'+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+'\n')
-                        fp.close()
-                if os.environ.get('OB2LOOP') != None and os.environ.get('OB2LOOP').lower() == 'x':
-                        if os.path.isfile(os.path.dirname(os.path.abspath(__file__))+'/'+market+'/EXITFLAG'):
-                                sys.exit()
-                        elif os.path.isfile(ramdiskpath+'/'+market+'/EXITFLAG') == True:
-                                os.system('rm '+ramdiskpath+'/'+market+'/EXITFLAG')
-                                sys.exit()
-                        else:
-                                sleep(1)
-                                continue
-                else:
-                        sys.exit()
-        if remove_crossed_prices == True:
-                highestbidprice = 0
-                lowestaskprice = 0
-                while len(bidarray) > 0 and len(askarray) > 0 and ( highestbidprice == 0 or highestbidprice >= lowestaskprice ):
-                        highestbid = bidarray[0]
-                        lowestask = askarray[0]
-                        highestbidprice = float(highestbid[0])
-                        lowestaskprice = float(lowestask[0])
-                        highestbidsize = float(highestbid[1])
-                        lowestasksize = float(lowestask[1])
-                        highestbidoffset = int(highestbid[2])
-                        lowestaskoffset = int(lowestask[2])
-                        if highestbidprice >= lowestaskprice:
-                                if highestbidoffset < lowestaskoffset:
-                                        bidarray.pop(0)
-                                elif highestbidoffset > lowestaskoffset:
-                                        askarray.pop(0)
-                                else:
-                                        if os.access(ramdiskpath+'/'+market, os.W_OK):
-                                                fp = open(ramdiskpath+'/'+market+'/TRAPsameoffset', "a")
-                                                fp.write(str(highestbidprice)+','+str(highestbidsize)+','+str(lowestaskprice)+','+str(lowestasksize)+','+str(highestbidoffset)+','+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+'\n')
-                                                fp.close()
-                                        if highestbidsize > lowestasksize:
-                                                askarray.pop(0)
-                                                bidarray[0] = [ str(highestbidprice), str(highestbidsize - lowestasksize), str(highestbidoffset), highestbid[3] ]
-                                        elif highestbidsize < lowestasksize:
-                                                askarray[0] = [ str(lowestaskprice), str(lowestasksize - highestbidsize), str(lowestaskoffset), lowestask[3] ]
-                                                bidarray.pop(0)
-                                        else:
-                                                askarray.pop(0)
-                                                bidarray.pop(0)
-                if len(bidarray) == 0 or len(askarray) == 0:
-                        print('Warning: bids or asks empty', str(len(bidarray)), str(len(askarray)), datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-                        if os.access(ramdiskpath+'/'+market, os.W_OK):
-                                fp = open(ramdiskpath+'/'+market+'/TRAPemptyarrays', "a")
-                                fp.write(str(len(bidarray))+','+str(len(askarray))+',1,'+datetime.now().strftime("%Y-%m-%d %H:%M:%S")+'\n')
-                                fp.close()
-                        if os.environ.get('OB2LOOP') != None and os.environ.get('OB2LOOP').lower() == 'x':
-                                if os.path.isfile(os.path.dirname(os.path.abspath(__file__))+'/'+market+'/EXITFLAG'):
-                                        sys.exit()
-                                elif os.path.isfile(ramdiskpath+'/'+market+'/EXITFLAG') == True:
-                                        os.system('rm '+ramdiskpath+'/'+market+'/EXITFLAG')
-                                        sys.exit()
-                                else:
-                                        sleep(1)
-                                        continue
-                        else:
-                                sys.exit()
-        count = 0
-        highestoffset = 0
-        lowestoffset = 0
-        bidsizetotal = 0
-        asksizetotal = 0
-        if len(sys.argv) > 3 and ( sys.argv[3] == 'compact' or sys.argv[3] == 'ultracompact' ):
-                if sys.argv[3] == 'compact':
-                        if fcreatedat != 0:
-                                print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), fcreatedat, fcreatedatheight, fprice, fside, fsize)
-                        print('Bid'+' '.ljust(widthprice+widthsize+26)+'| Ask')
-                elif sys.argv[3] == 'ultracompact':
-                        if fcreatedat != 0:
-                                print(fcreatedat[5:], fcreatedatheight, fprice, fside, fsize)
-                        print('Bid'+' '.ljust(widthprice+widthsize+12)+'| Ask')
+    col_width = max_price_len + 3 + max_size_len  # For " | "
+
+    print(f"OrderBook for {market}:")
+    if latest_trade:
+        print(f"Last trade: {latest_trade['createdat']} {latest_trade['createdatheight']} {latest_trade['price']} {latest_trade['side']} {latest_trade['size']}")
+    # Dynamic header with 1-space indentation
+    price_header = "BidP".rjust(max_price_len)
+    qty_header = "BidQ".rjust(max_size_len)
+    left_header = f"{price_header} | {qty_header}".ljust(col_width)
+    price_header = "AskP".rjust(max_price_len)
+    qty_header = "AskQ".rjust(max_size_len)
+    right_header = f"{price_header} | {qty_header}"
+    print(f" {left_header} | {right_header}")
+
+    # Display rows with 1-space indentation
+    for i in range(depth):
+        bid_str = ""
+        ask_str = ""
+
+        # Format bids
+        if i < len(resolved_bids):
+            price_dec, size_dec = resolved_bids[i]
+            price_str = bid_price_map.get(price_dec, str(price_dec))
+            if '.' in price_str:
+                integer_part, fractional_part = price_str.split('.')
+                fractional_part = fractional_part.rstrip('0')
+                fractional_part = fractional_part + ' ' * (max_decimals - len(fractional_part))
+                formatted_price = f"{integer_part}.{fractional_part}"
+            else:
+                formatted_price = f"{price_str}{' ' * (max_decimals + 1)}"
+            formatted_price = formatted_price.rjust(max_price_len)
+            size_str = str(size_dec).rjust(max_size_len)
+            bid_str = f"{formatted_price} | {size_str}"
         else:
-                if fcreatedat != 0:
-                        print(datetime.now().strftime("%Y-%m-%d %H:%M:%S"), 'Last trade:', str(fcreatedat)[0:19], fcreatedatheight, fprice, fside, fsize)
-                print('Bid'+' '.ljust(widthprice+widthsize+widthoffset+21)+'| Ask')
-        while count < min(depth, max(len(bidarray), len(askarray))):
-                if count < len(bidarray):
-                        biditem = bidarray[count]
-                        biditemprice = float(biditem[0])
-                        biditemsize = float(biditem[1])
-                        biditemoffset = int(biditem[2])
-                        biditemdatetime = ' '+str(biditem[3])[0:19]
-                else:
-                        biditemprice = ''
-                        biditemsize = ''
-                        biditemoffset = 0
-                        biditemdatetime = ''
-                if count < len(askarray):
-                        askitem = askarray[count]
-                        askitemprice = float(askitem[0])
-                        askitemsize = float(askitem[1])
-                        askitemoffset = int(askitem[2])
-                        askitemdatetime = ' '+str(askitem[3])[0:19]
-                else:
-                        askitemprice = ''
-                        askitemsize = ''
-                        askitemoffset = 0
-                        askitemdatetime = ''
-                highestoffset = max(biditemoffset, askitemoffset, highestoffset)
-                if biditemsize != '':
-                        bidsizetotal += biditemsize
-                        biditemsizet = '('+str(biditemsize)+')'
-                        biditemoffsett = str(biditemoffset)
-                else:
-                        biditemsizet = ''
-                        biditemoffsett = ''
-                if askitemsize != '':
-                        asksizetotal += askitemsize
-                        askitemsizet = '('+str(askitemsize)+')'
-                        askitemoffsett = str(askitemoffset)
-                else:
-                        askitemsizet = ''
-                        askitemoffsett = ''
-                if count == 0:
-                        highestbidprice = biditemprice
-                        lowestaskprice = askitemprice
-                        lowestoffset = min(biditemoffset, askitemoffset)
-                else:
-                        lowestoffset = min(biditemoffset, askitemoffset, lowestoffset)
-                if len(sys.argv) > 3 and ( sys.argv[3] == 'compact' or sys.argv[3] == 'ultracompact' ):
-                        if sys.argv[3] == 'compact':
-                                biditemoffset = ''
-                                askitemoffset = ''
-                                biditemdatetime = biditemdate[6:]
-                                askitemdatetime = askitemdate[6:]
-                        elif sys.argv[3] == 'ultracompact':
-                                biditemoffset = ''
-                                askitemoffset = ''
-                                biditemdatetime = ''
-                                askitemdatetime = ''
-                else:
-                        biditemoffset = ' '+str(biditemoffset).ljust(widthoffset)
-                        askitemoffset = ' '+str(askitemoffset).ljust(widthoffset)
-                if biditemprice == '':
-                        padding=' '.ljust(20)
-                else:
-                        padding=''
-                if dydxticksize == 0:
-                        dydxmarket = market
-                        dydxticksize = getticksize()
-                        if dydxticksize == None:
-                                print('Error: No such market', dydxmarket)
-                                exit()
-                        decimals = dydxticksize.count('0')
-                if type(biditemprice) == float:
-                        biditempricestr = f'{biditemprice:.{decimals}f}'
-                else:
-                        biditempricestr = biditemprice
-                if type(askitemprice) == float:
-                        askitempricestr = f'{askitemprice:.{decimals}f}'
-                else:
-                        askitempricestr = askitemprice
-                print(biditempricestr.ljust(widthprice), biditemsizet.ljust(widthsize+2)+biditemoffsett.rjust(widthoffset)+biditemdatetime+padding+' | '+askitempricestr.ljust(widthprice), askitemsizet.ljust(widthsize+2)+askitemoffsett.rjust(widthoffset)+askitemdatetime, end = '\r')
-                if sys.argv[-1] != 'noansi' and fcreatedat != 0:
-                        if biditemprice == float(fprice):
-                                print(f"{REDWHITE}{biditempricestr}{NC}", end = '\r')
-                        elif askitemprice == float(fprice):
-                                print(biditempricestr.ljust(widthprice), biditemsizet.ljust(widthsize+2)+biditemoffsett.rjust(widthoffset)+biditemdatetime+padding+' | '+GREENWHITE+str(askitempricestr)+NC, end = '\r')
-                print()
-                count += 1
-        print('maxbid   :', f'{highestbidprice:.{decimals}f}')
-        if '{0:.4f}'.format(lowestaskprice - highestbidprice)[:1] != '-':
-                plussign = '+'
-                crossmsg = ''
+            bid_str = " " * col_width
+
+        # Format asks
+        if i < len(resolved_asks):
+            price_dec, size_dec = resolved_asks[i]
+            price_str = ask_price_map.get(price_dec, str(price_dec))
+            if '.' in price_str:
+                integer_part, fractional_part = price_str.split('.')
+                fractional_part = fractional_part.rstrip('0')
+                fractional_part = fractional_part + ' ' * (max_decimals - len(fractional_part))
+                formatted_price = f"{integer_part}.{fractional_part}"
+            else:
+                formatted_price = f"{price_str}{' ' * (max_decimals + 1)}"
+            formatted_price = formatted_price.rjust(max_price_len)
+            size_str = str(size_dec).rjust(max_size_len)
+            ask_str = f"{formatted_price} | {size_str}"
         else:
-                plussign = ''
-                crossmsg = ' *** CROSSED PRICES ***'
-        print('minask   :', f'{lowestaskprice:.{decimals}f}', '('+plussign+'{0:.4f}'.format(lowestaskprice - highestbidprice)+')', '{0:.4f}'.format((lowestaskprice - highestbidprice) / highestbidprice * 100)+'%'+crossmsg)
-        print('bidvolume:', bidsizetotal)
-        print('askvolume:', asksizetotal)
-        print('minoffset:', lowestoffset)
-        print(f"maxoffset: {highestoffset} (+{highestoffset - lowestoffset})")
-        mycursor = conn.execute(f"SELECT * FROM v4markets WHERE market_id = '{market}';")
-        record = mycursor.fetchone()
-        conn.commit()
-        market_id = record[0]
-        clobpairid = record[1]
-        ticker = record[2]
-        status = record[3]
-        oracleprice = record[4]
-        pricechange24h = record[5]
-        volume24h = record[6]
-        trades24h = record[7]
-        nextfundingrate = record[8]
-        initialmarginfraction = record[9]
-        maintenancemarginfraction = record[10]
-        openinterest = record[11]
-        atomicresolution = record[12]
-        quantumconversionexponent = record[13]
-        ticksize = record[14]
-        stepsize = record[15]
-        stepbasequantums = record[16]
-        subtickspertick = record[17]
-        markettype = record[18]
-        openinterestlowercap = record[19]
-        openinterestuppercap = record[20]
-        baseopeninterest = record[21]
-        defaultfundingrate1h = record[22]
-        effectiveat = record[23]
-        effectiveatheight = record[24]
-        marketid = record[25]
-        datetime = record[26]
-        print('priceChange24H'.ljust(17)+':', str(pricechange24h)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('nextFundingRate'.ljust(17)+':', "{:.8f}".format(nextfundingrate)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('openInterest'.ljust(17)+':', str(openinterest)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('trades24H'.ljust(17)+':', str(trades24h)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('volume24H'.ljust(17)+':', str(volume24h)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('effectiveAt'.ljust(17)+':', str(effectiveat)[0:19][:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('effectiveAtHeight'.ljust(17)+':', str(effectiveatheight)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('marketId'.ljust(17)+':', str(marketid)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        print('oraclePrice'.ljust(17)+':', str(oracleprice)[:widthmarketstats].ljust(widthmarketstats)+str(datetime)[0:19])
-        endtime = datetime.now()
-        print('Runtime          :' , endtime - starttime)
-        if os.environ.get('OB2LOOP') != None and os.environ.get('OB2LOOP').lower() == 'x':
-                if os.path.isfile(os.path.dirname(os.path.abspath(__file__))+'/'+market+'/EXITFLAG'):
-                        sys.exit()
-                elif os.path.isfile(ramdiskpath+'/'+market+'/EXITFLAG') == True:
-                        os.system('rm '+ramdiskpath+'/'+market+'/EXITFLAG')
-                        sys.exit()
-                else:
-                        sleep(1)
+            ask_str = " " * col_width
+
+        print(f" {bid_str} | {ask_str}")
+
+    # Calculate additional metrics
+    maxbid = resolved_bids[0][0] if resolved_bids else Decimal('0')
+    minask = resolved_asks[0][0] if resolved_asks else Decimal('0')
+    diff = minask - maxbid if resolved_bids and resolved_asks else Decimal('0')
+    diff_percent = (diff / maxbid * 100) if maxbid != 0 else Decimal('0')
+
+    # Format difference without trailing zeros
+    diff_str = f"{'+' if diff >= 0 else ''}{float(diff):.4f}".rstrip('0').rstrip('.')
+
+    # Format percentage with up to 4 digits precision, no trailing zeros
+    diff_percent_str = f"{float(diff_percent):.4f}".rstrip('0').rstrip('.') + '%'
+
+    bid_volume = sum(size_dec for _, size_dec in resolved_bids[:depth])
+    ask_volume = sum(size_dec for _, size_dec in resolved_asks[:depth])
+
+    # Format metrics with alignment
+    maxbid_str = bid_price_map.get(maxbid, str(maxbid))
+    if '.' in maxbid_str:
+        integer_part, fractional_part = maxbid_str.split('.')
+        fractional_part = fractional_part.rstrip('0')
+        fractional_part = fractional_part + ' ' * (max_decimals - len(fractional_part))
+        formatted_maxbid = f"{integer_part}.{fractional_part}"
+    else:
+        formatted_maxbid = f"{maxbid_str}{' ' * (max_decimals + 1)}"
+    formatted_maxbid = formatted_maxbid.rjust(max_price_len)
+
+    minask_str = ask_price_map.get(minask, str(minask))
+    if '.' in minask_str:
+        integer_part, fractional_part = minask_str.split('.')
+        fractional_part = fractional_part.rstrip('0')
+        fractional_part = fractional_part + ' ' * (max_decimals - len(fractional_part))
+        formatted_minask = f"{integer_part}.{fractional_part}"
+    else:
+        formatted_minask = f"{minask_str}{' ' * (max_decimals + 1)}"
+    formatted_minask = formatted_minask.rjust(max_price_len)
+
+    bid_volume_str = str(bid_volume).rjust(max_size_len)
+    ask_volume_str = str(ask_volume).rjust(max_size_len)
+
+    # Print footer metrics without indentation
+    print(f"MaxBid   : {formatted_maxbid}")
+    print(f"MinAsk   : {formatted_minask} ({diff_str}, {diff_percent_str})")
+    print(f"BidVolume: {bid_volume_str}")
+    print(f"AskVolume: {ask_volume_str}")
+    if market_data:
+        # Calculate max width for market data labels
+        max_label_width = max(len(label) for label in [
+            'priceChange24H', 'nextFundingRate', 'openInterest', 'trades24H',
+            'volume24H', 'effectiveAt', 'effectiveAtHeight', 'marketId', 'oraclePrice', 'Runtime'
+        ])
+        # Calculate max width for market data values
+        max_data_width = max(
+            len(str(market_data.get(key, '')))
+            for key in ['pricechange24h', 'openinterest', 'trades24h',
+                        'volume24h', 'effectiveat', 'effectiveatheight', 'marketid', 'oracleprice']
+        ) if market_data else 13
+        # Include nextfundingrate with fixed 8 decimal places
+        max_data_width = max(max_data_width, len(format(round(market_data.get('nextfundingrate', 0), 8), '.8f')) if market_data else 0)
+        datetime_width = len(market_data.get('datetime', '2025-08-25T20:45:57'))  # 19 chars
+
+        print(f"{'priceChange24H'.ljust(max_label_width)} : {str(market_data['pricechange24h']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'nextFundingRate'.ljust(max_label_width)} : {format(round(market_data['nextfundingrate'], 8), '.8f').ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'openInterest'.ljust(max_label_width)} : {str(market_data['openinterest']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'trades24H'.ljust(max_label_width)} : {str(market_data['trades24h']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'volume24H'.ljust(max_label_width)} : {str(market_data['volume24h']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'effectiveAt'.ljust(max_label_width)} : {str(market_data['effectiveat']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'effectiveAtHeight'.ljust(max_label_width)} : {str(market_data['effectiveatheight']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'marketId'.ljust(max_label_width)} : {str(market_data['marketid']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'oraclePrice'.ljust(max_label_width)} : {str(market_data['oracleprice']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
+        print(f"{'Runtime'.ljust(max_label_width)} : {runtime}")
+    print("---")
+
+async def main():
+    args = parse_args()
+    # Derive port from clobPairId
+    try:
+        clob_pair_id = get_clob_pair_id(args.market)
+        port = 10000 + clob_pair_id
+    except Exception as e:
+        print(f"Failed to start client: {e}")
+        return
+
+    url = f"http://{args.ip}:{port}/orderbook"
+    print(f"Connecting to server at {url}")
+
+    # Set up database connection
+    try:
+        if args.ip in ("localhost", "127.0.0.1"):
+            # Local socket connection
+            pool = await asyncpg.create_pool(
+                database="orderbook",
+                user="vmware",
+                password="orderbook"
+            )
         else:
-                sys.exit()
+            # Network connection
+            pool = await asyncpg.create_pool(
+                host=args.ip,
+                port=5432,
+                database="orderbook",
+                user="vmware",
+                password="orderbook"
+            )
+    except Exception as e:
+        print(f"Failed to connect to database: {e}")
+        return
+
+    async with pool:
+        while True:
+            start_time = time.perf_counter()
+            try:
+                response = requests.get(url, timeout=5)
+                response.raise_for_status()
+                snapshot = response.json()
+
+                market = snapshot.get("market", "Unknown")
+                bids = snapshot.get("bids", [])
+                asks = snapshot.get("asks", [])
+
+                latest_trade = await get_latest_trade(pool, market)
+                market_data = await get_market_data(pool, market)
+
+                # Calculate runtime for this iteration
+                duration = time.perf_counter() - start_time
+                runtime = str(datetime.timedelta(seconds=duration))
+
+                print_order_book(bids, asks, market, args.depth, latest_trade, market_data, runtime)
+
+                loop = os.environ.get("OB2LOOP") == "x"
+                if not loop:
+                    break  # Exit after one fetch if not looping
+
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching orderbook: {e}")
+                loop = os.environ.get("OB2LOOP") == "x"
+                if not loop:
+                    break  # Exit on error if not looping
+
+            time.sleep(args.interval)
+
+if __name__ == "__main__":
+    asyncio.run(main())
