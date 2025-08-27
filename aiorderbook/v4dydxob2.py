@@ -161,7 +161,7 @@ def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], m
     left_header = f"{price_header} | {qty_header}".ljust(col_width)
     price_header = "AskP".rjust(max_price_len)
     qty_header = "AskQ".rjust(max_size_len)
-    right_header = f"{price_header} | {qty_header}"
+    right_header = f"{price_header} | {qty_header} |"
     print(f" {left_header} | {right_header}")
 
     # Display rows with 1-space indentation
@@ -203,7 +203,9 @@ def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], m
         else:
             ask_str = " " * col_width
 
-        print(f" {bid_str} | {ask_str}")
+        # Add marker for the first row (best bid/ask)
+        prefix = " [BestBidAsk]" if i == 0 else " "
+        print(f" {bid_str} | {ask_str} |{prefix}")
 
     # Calculate additional metrics
     maxbid = resolved_bids[0][0] if resolved_bids else Decimal('0')
