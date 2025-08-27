@@ -7,6 +7,9 @@ from typing import Dict
 from decimal import Decimal
 import aiohttp
 from aiohttp import web
+from datetime import datetime, timezone
+import os
+import psutil
 
 WSINDEXERURL = 'wss://indexer.dydx.trade/v4/ws'
 #WSINDEXERURL = 'wss://indexer.v4testnet.dydx.exchange/v4/ws'
@@ -42,6 +45,9 @@ async def websocket_task(market: str):
 
     while True:  # Reconnection loop
         first_message = True
+        now_utc = datetime.now(timezone.utc) # Get current UTC time
+        zulu_time = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z" # Format with milliseconds (3 decimal places) and Zulu suffix
+        print(f"{zulu_time} Running updated dYdX WebSocket client with v4_orderbook for {market}")
         try:
             async with websockets.connect(url, ping_interval=None, ping_timeout=20) as ws:
                 subscribe_msg = {
@@ -136,11 +142,31 @@ async def http_server(market: str):
     # Keep running indefinitely
     await asyncio.Event().wait()
 
+async def heartbeat():
+    # Print "I am still alive" every 60 seconds
+    while True:
+        try:
+#            print("I am still alive")
+            now_utc = datetime.now(timezone.utc) # Get current UTC time
+            zulu_time = now_utc.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z" # Format with milliseconds (3 decimal places) and Zulu suffix
+            print(f"{zulu_time} DEBUG: memory usage: {process.memory_info().rss / 1024 / 1024:.2f} MB")
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            print("Heartbeat task cancelled")
+            break
+        except Exception as e:
+            print(f"heartbeat error: {e}")
+            break
+
 async def start_server(market: str):
+    # Start the heartbeat task
+    heartbeat_task = asyncio.create_task(heartbeat())
+
     ws_task = asyncio.create_task(websocket_task(market))
     http_task = asyncio.create_task(http_server(market))
     await asyncio.gather(ws_task, http_task)
 
 if __name__ == "__main__":
     args = parse_args()
+    process = psutil.Process(os.getpid())
     asyncio.run(start_server(args.market))
