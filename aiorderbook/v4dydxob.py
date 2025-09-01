@@ -5,18 +5,18 @@ import argparse
 import requests
 from typing import Dict
 from decimal import Decimal
-import aiohttp
 from aiohttp import web
 from datetime import datetime, timezone
 import os
 import psutil
+import redis
 
 WSINDEXERURL = 'wss://indexer.dydx.trade/v4/ws'
 #WSINDEXERURL = 'wss://indexer.v4testnet.dydx.exchange/v4/ws'
 #WSINDEXERURL = 'wss://indexer.v4staging.dydx.exchange/v4/ws'
-PERPETUALURL = 'https://indexer.dydx.trade/v4/perpetualMarkets'
-#PERPETUALURL = 'https://indexer.v4testnet.dydx.exchange/v4/perpetualMarkets'
-#PERPETUALURL = 'https://indexer.v4staging.dydx.exchange/v4/perpetualMarkets'
+INDEXERURL = 'https://indexer.dydx.trade/v4'
+#INDEXERURL = 'https://indexer.v4testnet.dydx.exchange/v4'
+#INDEXERURL = 'https://indexer.v4staging.dydx.exchange/v4'
 
 bids: Dict[str, str] = {}  # Global for simplicity; price_str: size_str
 asks: Dict[str, str] = {}  # Global for simplicity; price_str: size_str
@@ -27,14 +27,24 @@ def parse_args():
     return parser.parse_args()
 
 def get_clob_pair_id(market: str) -> int:
+    #first, check redis
+    r = redis.Redis(host='localhost', port=6379, db=0)
+    if r.exists(f"{market}-clobpairid"):
+        clob_pair_id = int(r.get(f"{market}-clobpairid"))
+        print(f"Got clob_pair_id {clob_pair_id} from redis")
+        return clob_pair_id
     try:
-        response = requests.get(PERPETUALURL, timeout=5)
+        # Using synchronous requests for this initial call, as it's a one-time setup
+        import requests
+        response = requests.get(f"{INDEXERURL}/perpetualMarkets", timeout=5)
         response.raise_for_status()
         data = response.json()
         markets = data.get("markets", {})
         if market not in markets:
             raise ValueError(f"Market {market} not found in API response")
         clob_pair_id = int(markets[market]["clobPairId"])
+        r.set(f"{market}-clobpairid", int(clob_pair_id))
+        print(f"Got clob_pair_id {clob_pair_id} from indexer")
         return clob_pair_id
     except (requests.exceptions.RequestException, ValueError, KeyError) as e:
         print(f"Error fetching clobPairId for {market}: {e}")
@@ -70,6 +80,10 @@ async def websocket_task(market: str):
                         if data["type"] == "connected":
                             continue
 
+                        if data["type"] == "error":
+                            print(data)
+                            raise msgerror("msgerror")
+
                         contents = data.get("contents", {})
                         if data["type"] == "subscribed" or data["type"] == "channel_data":
                             for side, book in [("bids", bids), ("asks", asks)]:
@@ -93,6 +107,8 @@ async def websocket_task(market: str):
                     except websockets.exceptions.ConnectionClosed:
                         print("WebSocket connection closed, attempting to reconnect...")
                         break  # Exit inner loop to reconnect
+                    except msgerror as e:
+                        print(f"Error processing message: {e}")
                     except Exception as e:
                         print(f"Error processing message: {e}")
 
