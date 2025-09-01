@@ -27,9 +27,15 @@ class DydxClientListener(WSListener):
             try:
                 message = frame.get_payload_as_ascii_text()
                 parsed_message = json.loads(message)
+                if 'type' in parsed_message and parsed_message["type"] == "error":
+                    print(parsed_message)
+                    raise msgerror("msgerror")
+
 #                print(json.dumps(parsed_message, indent=2))
                 parsed_message['timestamp3'] = time.time()
                 print(parsed_message)
+            except msgerror as e:
+                print(f"Exception {e} on message {message}")
             except Exception as e:
                 print(f"Exception {e} on message {message}")
 #            except json.JSONDecodeError:
