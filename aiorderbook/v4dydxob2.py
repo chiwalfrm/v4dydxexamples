@@ -1,16 +1,19 @@
 import argparse
-import requests
 import time
 import os
 import asyncio
-import asyncpg
+import asyncpg  # Moved to top level for type hints
 from typing import List, Tuple, Dict
 from decimal import Decimal
 import datetime
+import aiohttp
+import redis
 
 INDEXERURL = 'https://indexer.dydx.trade/v4'
 #INDEXERURL = 'https://indexer.v4testnet.dydx.exchange/v4'
 #INDEXERURL = 'https://indexer.v4staging.dydx.exchange/v4'
+
+starttime = time.time()
 
 def parse_args():
     parser = argparse.ArgumentParser(description="dYdX v4 Orderbook Client")
@@ -18,10 +21,19 @@ def parse_args():
     parser.add_argument("--market", type=str, default="BTC-USD", help="Market to fetch orderbook for (e.g., BTC-USD, PEPE-USD) (default: BTC-USD)")
     parser.add_argument("--depth", type=int, default=10, help="Number of orderbook rows to display (default: 10)")
     parser.add_argument("--interval", type=float, default=1.0, help="Interval between requests in seconds when looping (default: 1.0)")
+    parser.add_argument("--fast", action="store_true", help="Skip the 'last trade' fetch and database connection")
     return parser.parse_args()
 
 def get_clob_pair_id(market: str) -> int:
+    #first, check redis
+    r = redis.Redis(host='localhost', port=6379, db=0)
+    if r.exists(f"{market}-clobpairid"):
+        clob_pair_id = int(r.get(f"{market}-clobpairid"))
+        print(f"Got clob_pair_id {clob_pair_id} from redis")
+        return clob_pair_id
     try:
+        # Using synchronous requests for this initial call, as it's a one-time setup
+        import requests
         response = requests.get(f"{INDEXERURL}/perpetualMarkets", timeout=5)
         response.raise_for_status()
         data = response.json()
@@ -29,12 +41,16 @@ def get_clob_pair_id(market: str) -> int:
         if market not in markets:
             raise ValueError(f"Market {market} not found in API response")
         clob_pair_id = int(markets[market]["clobPairId"])
+        r.set(f"{market}-clobpairid", int(clob_pair_id))
+        print(f"Got clob_pair_id {clob_pair_id} from indexer")
         return clob_pair_id
     except (requests.exceptions.RequestException, ValueError, KeyError) as e:
         print(f"Error fetching clobPairId for {market}: {e}")
         raise
 
 async def get_latest_trade(pool: asyncpg.Pool, market: str) -> dict:
+    if pool is None:
+        return {}  # Return empty dict if no pool (fast mode)
     market_part, base_part = market.split('-')
     table_name = f"v4trades{market_part.lower()}_{base_part.lower()}"
     try:
@@ -56,31 +72,27 @@ async def get_latest_trade(pool: asyncpg.Pool, market: str) -> dict:
         print(f"Error querying latest trade from {table_name}: {e}")
         return {}
 
-async def get_market_data(pool: asyncpg.Pool, market: str) -> dict:
-    query = (
-        f"SELECT pricechange24h, nextfundingrate, openinterest, trades24h, volume24h, "
-        f"effectiveat, effectiveatheight, marketid, oracleprice, datetime "
-        f"FROM v4markets WHERE market_id = $1"
-    )
+async def get_market_data(market: str, response: aiohttp.ClientResponse) -> dict:
     try:
-        async with pool.acquire() as conn:
-            row = await conn.fetchrow(query, market)
-            if row:
-                return {
-                    "pricechange24h": row["pricechange24h"],
-                    "nextfundingrate": row["nextfundingrate"],
-                    "openinterest": row["openinterest"],
-                    "trades24h": row["trades24h"],
-                    "volume24h": row["volume24h"],
-                    "effectiveat": row["effectiveat"].strftime("%Y-%m-%dT%H:%M:%S") if row["effectiveat"] else "",
-                    "effectiveatheight": row["effectiveatheight"] if row["effectiveatheight"] is not None else 0,
-                    "marketid": row["marketid"] if row["marketid"] is not None else 0,
-                    "oracleprice": row["oracleprice"],
-                    "datetime": row["datetime"].strftime("%Y-%m-%dT%H:%M:%S")
-                }
+        data = await response.json()
+        market_data = data  # Direct market data for ?market query
+        if not market_data:
+            print(f"No market data found for {market}")
             return {}
+        return {
+            "pricechange24h": float(market_data.get("priceChange24H", 0)),
+            "nextfundingrate": float(market_data.get("nextFundingRate", 0)),
+            "openinterest": float(market_data.get("openInterest", 0)),
+            "trades24h": int(market_data.get("trades24H", 0)),
+            "volume24h": float(market_data.get("volume24H", 0)),
+            "effectiveat": market_data.get("effectiveAt", ""),
+            "effectiveatheight": int(market_data.get("effectiveAtHeight", 0)),
+            "marketid": int(market_data.get("marketId", 0)),
+            "oracleprice": float(market_data.get("oraclePrice", 0)),
+            "datetime": market_data.get("effectiveAt", "2025-08-30T01:29:45")  # Fallback if not provided
+        }
     except Exception as e:
-        print(f"Error querying market data for market_id={market}: {e}")
+        print(f"Error processing market data: {e}")
         return {}
 
 def resolve_crossed_order_book(bid_list: List[Tuple[Decimal, Decimal]], ask_list: List[Tuple[Decimal, Decimal]]) -> Tuple[List[Tuple[Decimal, Decimal]], List[Tuple[Decimal, Decimal]]]:
@@ -100,7 +112,7 @@ def resolve_crossed_order_book(bid_list: List[Tuple[Decimal, Decimal]], ask_list
             bid_list.pop(0)
     return bid_list, ask_list
 
-def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], market: str, depth: int, latest_trade: dict, market_data: dict, runtime: str):
+def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], market: str, depth: int, latest_trade: dict, market_data: dict, runtime: str, args):
     # Convert to Decimal for sorting and cross-resolution
     bid_decimals = [(Decimal(price), Decimal(size)) for price, size in bids]
     ask_decimals = [(Decimal(price), Decimal(size)) for price, size in asks]
@@ -153,7 +165,7 @@ def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], m
     col_width = max_price_len + 3 + max_size_len  # For " | "
 
     print(f"OrderBook for {market}:")
-    if latest_trade:
+    if latest_trade and not args.fast:  # Skip "Last trade" line if --fast is used
         print(f"Last trade: {latest_trade['createdat']} {latest_trade['createdatheight']} {latest_trade['price']} {latest_trade['side']} {latest_trade['size']}")
     # Dynamic header with 1-space indentation
     price_header = "BidP".rjust(max_price_len)
@@ -265,7 +277,7 @@ def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], m
         ) if market_data else 13
         # Include nextfundingrate with fixed 8 decimal places
         max_data_width = max(max_data_width, len(format(round(market_data.get('nextfundingrate', 0), 8), '.8f')) if market_data else 0)
-        datetime_width = len(market_data.get('datetime', '2025-08-25T20:45:57'))  # 19 chars
+        datetime_width = len(market_data.get('datetime', '2025-08-30T01:29:45'))  # 19 chars
 
         print(f"{'priceChange24H'.ljust(max_label_width)} : {str(market_data['pricechange24h']).ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
         print(f"{'nextFundingRate'.ljust(max_label_width)} : {format(round(market_data['nextfundingrate'], 8), '.8f').ljust(max_data_width)} {market_data['datetime'].ljust(datetime_width)}")
@@ -279,7 +291,7 @@ def print_order_book(bids: List[Tuple[str, str]], asks: List[Tuple[str, str]], m
         print(f"{'Runtime'.ljust(max_label_width)} : {runtime}")
     print("---")
 
-async def main():
+async def main(starttime):
     args = parse_args()
     # Derive port from clobPairId
     try:
@@ -292,60 +304,121 @@ async def main():
     url = f"http://{args.ip}:{port}/orderbook"
     print(f"Connecting to server at {url}")
 
-    # Set up database connection
-    try:
-        if args.ip in ("localhost", "127.0.0.1"):
-            # Local socket connection
-            pool = await asyncpg.create_pool(
-                database="orderbook",
-                user="vmware",
-                password="orderbook"
-            )
-        else:
-            # Network connection
-            pool = await asyncpg.create_pool(
-                host=args.ip,
-                port=5432,
-                database="orderbook",
-                user="vmware",
-                password="orderbook"
-            )
-    except Exception as e:
-        print(f"Failed to connect to database: {e}")
-        return
+    # Set up database connection only if not in fast mode
+    if not args.fast:
+        try:
+            if args.ip in ("localhost", "127.0.0.1"):
+                # Local socket connection
+                pool = await asyncpg.create_pool(
+                    database="orderbook",
+                    user="vmware",
+                    password="orderbook"
+                )
+            else:
+                # Network connection
+                pool = await asyncpg.create_pool(
+                    host=args.ip,
+                    port=5432,
+                    database="orderbook",
+                    user="vmware",
+                    password="orderbook"
+                )
+        except Exception as e:
+            print(f"Failed to connect to database: {e}")
+            return
+    else:
+        pool = None  # Dummy pool for fast mode to avoid database setup
 
-    async with pool:
+    if pool is not None:
+        async with pool:
+            while True:
+                start_time = time.perf_counter()
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        # Parallelize fetches
+                        orderbook_task = asyncio.create_task(session.get(url, timeout=aiohttp.ClientTimeout(total=5)))
+                        market_task = asyncio.create_task(session.get(f"http://{args.ip}:10999/markets?market={args.market}", timeout=aiohttp.ClientTimeout(total=5)))
+                        trade_task = asyncio.create_task(get_latest_trade(pool, args.market)) if not args.fast else None
+
+                        tasks = [orderbook_task, market_task]
+                        if trade_task:
+                            tasks.append(trade_task)
+                        orderbook_resp, market_resp, *trade_result = await asyncio.gather(*tasks)
+                        latest_trade = trade_result[0] if trade_result else {}
+
+                        snapshot = await orderbook_resp.json()
+                        market_data = await get_market_data(args.market, market_resp)
+
+                        market = snapshot.get("market", "Unknown")
+                        bids = snapshot.get("bids", [])
+                        asks = snapshot.get("asks", [])
+
+                        # Calculate runtime for this iteration
+#                        duration = time.perf_counter() - start_time
+#                        runtime = str(datetime.timedelta(seconds=duration))
+                        runtime = Decimal(time.time() - starttime)
+                        starttime = time.time()
+
+                        print_order_book(bids, asks, market, args.depth, latest_trade, market_data, runtime, args)
+
+                    loop = os.environ.get("OB2LOOP") == "x"
+                    if os.path.exists("/tmp/stopv4dydxob2") or not loop:
+                        break  # Exit after one fetch if not looping
+
+                except aiohttp.ClientError as e:
+                    print(f"Error fetching orderbook or market data: {e}")
+                    loop = os.environ.get("OB2LOOP") == "x"
+                    if os.path.exists("/tmp/stopv4dydxob2") or not loop:
+                        break  # Exit on error if not looping
+                except Exception as e:
+                    print(f"Unexpected error: {e}")
+                    loop = os.environ.get("OB2LOOP") == "x"
+                    if os.path.exists("/tmp/stopv4dydxob2") or not loop:
+                        break  # Exit on error if not looping
+
+                await asyncio.sleep(args.interval)
+    else:
         while True:
             start_time = time.perf_counter()
             try:
-                response = requests.get(url, timeout=5)
-                response.raise_for_status()
-                snapshot = response.json()
+                async with aiohttp.ClientSession() as session:
+                    # Parallelize fetches, skipping trade task
+                    orderbook_task = asyncio.create_task(session.get(url, timeout=aiohttp.ClientTimeout(total=5)))
+                    market_task = asyncio.create_task(session.get(f"http://{args.ip}:10999/markets?market={args.market}", timeout=aiohttp.ClientTimeout(total=5)))
 
-                market = snapshot.get("market", "Unknown")
-                bids = snapshot.get("bids", [])
-                asks = snapshot.get("asks", [])
+                    orderbook_resp, market_resp = await asyncio.gather(orderbook_task, market_task)
 
-                latest_trade = await get_latest_trade(pool, market)
-                market_data = await get_market_data(pool, market)
+                    snapshot = await orderbook_resp.json()
+                    market_data = await get_market_data(args.market, market_resp)
 
-                # Calculate runtime for this iteration
-                duration = time.perf_counter() - start_time
-                runtime = str(datetime.timedelta(seconds=duration))
+                    market = snapshot.get("market", "Unknown")
+                    bids = snapshot.get("bids", [])
+                    asks = snapshot.get("asks", [])
 
-                print_order_book(bids, asks, market, args.depth, latest_trade, market_data, runtime)
+                    # Calculate runtime for this iteration
+#                    duration = time.perf_counter() - start_time
+#                    runtime = str(datetime.timedelta(seconds=duration))
+                    runtime = Decimal(time.time() - starttime)
+                    starttime = time.time()
+
+                    print_order_book(bids, asks, market, args.depth, {}, market_data, runtime, args)
 
                 loop = os.environ.get("OB2LOOP") == "x"
-                if not loop:
+                if os.path.exists("/tmp/stopv4dydxob2") or not loop:
                     break  # Exit after one fetch if not looping
 
-            except requests.exceptions.RequestException as e:
-                print(f"Error fetching orderbook: {e}")
+            except aiohttp.ClientError as e:
+                print(f"Error fetching orderbook or market data: {e}")
                 loop = os.environ.get("OB2LOOP") == "x"
-                if not loop:
+                if os.path.exists("/tmp/stopv4dydxob2") or not loop:
+                    break  # Exit on error if not looping
+            except Exception as e:
+                print(f"Unexpected error: {e}")
+                loop = os.environ.get("OB2LOOP") == "x"
+                if os.path.exists("/tmp/stopv4dydxob2") or not loop:
                     break  # Exit on error if not looping
 
-            time.sleep(args.interval)
+            await asyncio.sleep(args.interval)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    asyncio.run(main(starttime))
