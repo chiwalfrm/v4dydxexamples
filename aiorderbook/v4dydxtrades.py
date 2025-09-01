@@ -42,6 +42,10 @@ class DydxClientListener(WSListener):
             try:
                 message = frame.get_payload_as_ascii_text()
                 parsed_message = json.loads(message)
+                if 'type' in parsed_message and parsed_message["type"] == "error":
+                    print(parsed_message)
+                    raise msgerror("msgerror")
+
                 if 'type' in parsed_message and parsed_message['type'] in ['subscribed', 'channel_data']:
                     keys3 = list(parsed_message.keys())
                     keys4 = list(parsed_message['contents'].keys())
@@ -75,6 +79,8 @@ class DydxClientListener(WSListener):
                 print("Received invalid UTF-8 text frame")
             except KeyError as e:
                 print(f"Missing key in message: {e}")
+            except msgerror as e:
+                print(f"Error: Exception {e}")
             except Exception as e:
                 print(f"Error: Exception {e}")
         elif frame.msg_type == WSMsgType.CLOSE:
@@ -216,7 +222,10 @@ async def dydx_trades_client(market_id):
                     "PRIMARY KEY (id, createdat)"
                     ")"
                 )
-                print(f"Created table {table_name}")
+                await pool.execute(
+                    f"CREATE INDEX idx_{table_name} ON {table_name} (datetime DESC)"
+                )
+                print(f"Created table {table_name} and index idx_{table_name}")
 #            else:
 #                await pool.execute(f"TRUNCATE TABLE {table_name}")
 #                print(f"Truncated table {table_name}")
