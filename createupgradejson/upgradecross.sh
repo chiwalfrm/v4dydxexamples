@@ -24,6 +24,6 @@ head -5 /tmp/a
 cat <<EOF
             "liquidity_tier": $liquiditytier,
             "market_type": "PERPETUAL_MARKET_TYPE_CROSS"
-        },
+        }
 EOF
 rm /tmp/a
