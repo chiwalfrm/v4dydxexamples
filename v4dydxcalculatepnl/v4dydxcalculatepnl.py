@@ -1,9 +1,11 @@
 import pandas as pd
 from collections import deque
 import sys
+from decimal import Decimal, getcontext
+getcontext().prec = 28
 
 filename = sys.argv[1]
-latest_price = float(sys.argv[2])
+latest_price = Decimal(sys.argv[2])
 # Load the CSV data from transactions.csv without headers
 df = pd.read_csv(filename, header=None)
 
@@ -12,15 +14,15 @@ df.columns = ['createdAt', 'market', 'side', 'size', 'price', 'fee', 'id']
 
 # Ensure correct data types
 df['createdAt'] = pd.to_datetime(df['createdAt'])
-df['size'] = df['size'].astype(float)
-df['price'] = df['price'].astype(float)
-df['fee'] = df['fee'].astype(float)
+df['size'] = df['size'].astype(str).apply(Decimal)
+df['price'] = df['price'].astype(str).apply(Decimal)
+df['fee'] = df['fee'].astype(str).apply(Decimal)
 
 # Initialize variables
 buy_queue = deque()  # To store buy transactions (quantity, price) for FIFO
-total_fees = 0
-realized_pnl = 0
-open_position = 0
+total_fees = Decimal('0')
+realized_pnl = Decimal('0')
+open_position = Decimal('0')
 
 # Process transactions in chronological order
 for _, row in df.sort_values('createdAt').iterrows():
@@ -56,8 +58,8 @@ for _, row in df.sort_values('createdAt').iterrows():
 
 # Calculate unrealized PnL and average open price for remaining open position
 # Use the latest price in the dataset for current market price
-unrealized_pnl = 0
-total_cost = 0
+unrealized_pnl = Decimal('0')
+total_cost = Decimal('0')
 for qty, buy_price in buy_queue:
     unrealized_pnl += qty * (latest_price - buy_price)
     total_cost += qty * buy_price
