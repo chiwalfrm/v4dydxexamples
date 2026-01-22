@@ -13,10 +13,10 @@
 ```
 $ python3 v4dydxget_all_fills3.py dydx1c280kjc2m5384mlzgf32wm4qxkmuqak9td0290 BTC-USD 58412676 > /tmp/transactions.csv
 $ python3 v4dydxcalculatepnl.py /tmp/transactions.csv 90000
-Open Position Remaining: 0.00000000 BTC
+Open Position Remaining: 0.00000000 BTC-USD
 Average Open Price: $0.00
-Realized PnL (FIFO): $-9021.27
-Unrealized PnL (FIFO, using latest price $90000.00): $-1532.22
+Realized PnL (FIFO): $-2937.73
+Unrealized PnL (FIFO, using latest price $90000.00): $0.00
 Total Fees: $278.98
 ```
 
