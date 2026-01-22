@@ -1,4 +1,4 @@
-Here is how to use these programs:
+# Instructions
 
 1. Run v4dydxget_all_fills3.py with the dYdXChain address, the market, and the starting block number to get all fills for that market from that block number to now.  Send the output to a file.
 
