@@ -66,6 +66,8 @@ for qty, buy_price in buy_queue:
 
 # Calculate average open price (weighted by quantity)
 average_open_price = total_cost / open_position if open_position > 0 else 0
+if open_position == 0:
+        unrealized_pnl = 0
 
 # Output results
 print(f"Open Position Remaining: {open_position:.8f} BTC")
