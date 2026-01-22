@@ -16,6 +16,6 @@ Open Position Remaining: 0.00000000 BTC
 Average Open Price: $129194835313394843648.00
 Realized PnL (FIFO): $-9021.27
 Unrealized PnL (FIFO, using latest price $90000.00): $-1532.22
-Total Fees: $278.98```
+Total Fees: $278.98 ```
 
 ***End***
