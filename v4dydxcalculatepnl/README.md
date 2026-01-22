@@ -1,6 +1,6 @@
 **Instructions**
 
-1. Run ```v4dydxget_all_fills3.py``` with the dYdXChain address, the market, and the starting block number to get all fills for that market from that block number to now.  Send the output to a file.
+1. Run ```v4dydxget_all_fills3.py``` with the dYdXChain address, the market, and the starting block number to get all fills for that market from that block number to now.  Send the output to a file.  You use the starting block number to limit the number of records it has to pull from API, but you can also use 0 to get ALL records.
 
 ```python3 v4dydxget_all_fills3.py dydx1c280kjc2m5384mlzgf32wm4qxkmuqak9td0290 BTC-USD 58412676 > /tmp/transactions.csv```
 
