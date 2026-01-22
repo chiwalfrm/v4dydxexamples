@@ -106,10 +106,16 @@ def main():
 
     # Exact output format required
     print(f"Open Position Remaining: {float(open_position):.8f} {market}")
-    print(f"Average Open Price: ${float(average_open_price):.2f}")
-    print(f"Realized PnL (FIFO): ${float(realized_pnl):.2f}")
-    print(f"Unrealized PnL (FIFO, using latest price ${float(current_price):.2f}): ${float(unrealized_pnl):.2f}")
-    print(f"Total Fees: ${float(total_fees):.2f}")
+    print(f"Average Open Price: ${float(average_open_price):,.2f}")
+    if realized_pnl < 0:
+        print(f"Realized PnL (FIFO): -${float(realized_pnl * -1):,.2f}")
+    else:
+        print(f"Realized PnL (FIFO): ${float(realized_pnl):,.2f}")
+    if unrealized_pnl < 0:
+        print(f"Unrealized PnL (FIFO, using latest price -${float(current_price * -1):,.2f}): ${float(unrealized_pnl):,.2f}")
+    else:
+        print(f"Unrealized PnL (FIFO, using latest price ${float(current_price):,.2f}): ${float(unrealized_pnl):,.2f}")
+    print(f"Total Fees: ${float(total_fees):,.2f}")
 
 if __name__ == "__main__":
     main()
